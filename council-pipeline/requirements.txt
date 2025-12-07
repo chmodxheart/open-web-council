@@ -1,0 +1,12 @@
+# Requirements for Council of LLMs Pipeline
+# For deployment via JSON import into Open WebUI
+
+# HTTP client for async API calls
+aiohttp==3.9.5
+requests
+
+# Note: Open WebUI already provides:
+# - fastapi, uvicorn, pydantic (web framework)
+# - openai, anthropic, google SDKs (not needed - we use Open WebUI's internal API)
+# - httpx (not needed - we use aiohttp)
+# - requests (but we include it anyway, because it's needed for some scripts that are used in the CLI)

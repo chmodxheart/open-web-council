@@ -1,0 +1,812 @@
+"""
+title: Council Evaluation Filter
+author: chmodxheart
+author_url: https://github.com/chmodxheart
+funding_url: https://github.com/chmodxheart
+version: 0.1.0
+description: Injects user-editable evaluation rubric for anonymous peer review
+
+Council of LLMs - Evaluation Prompt Filter
+
+This inlet filter injects user-customizable evaluation instructions when
+the Council orchestrator is in evaluation mode.
+
+Key Features:
+- User-editable evaluation rubric via Valves (editable in UI!)
+- Template support with {response_text} placeholder
+- Detects evaluation mode via CouncilMetadata
+- Injects structured evaluation prompt
+
+Users can customize the evaluation criteria and instructions without
+touching code - just edit in Open WebUI Admin Panel!
+"""
+
+from pydantic import BaseModel, Field
+from typing import Optional
+
+# Import Council data structures
+
+# ============================================================================
+# INLINED SCHEMAS (from schemas.py)
+# ============================================================================
+
+
+from pydantic import BaseModel, Field, validator
+from typing import Dict, List, Optional, Any, Literal
+from datetime import datetime
+from enum import Enum
+import uuid
+
+
+# ============================================================================
+# ENUMS & CONSTANTS
+# ============================================================================
+
+class CouncilMode(str, Enum):
+    """
+    Operating modes for Council components
+    Used in metadata to signal which phase of processing is active
+    """
+    INITIAL_QUERY = "initial_query"      # User's original query
+    EVALUATION = "evaluation"             # Evaluating anonymous responses
+    SYNTHESIS = "synthesis"               # Synthesizing final answer
+    COMPLETE = "complete"                 # Final output ready
+
+
+class EvaluationCriterion(str, Enum):
+    """
+    Standard evaluation criteria
+    Extensible for custom criteria in future versions
+    """
+    ACCURACY = "accuracy"
+    CLARITY = "clarity"
+    COMPLETENESS = "completeness"
+    RELEVANCE = "relevance"
+
+
+# ============================================================================
+# MODEL RESPONSE STRUCTURES
+# ============================================================================
+
+class ModelParameters(BaseModel):
+    """
+    Parameters for individual model queries
+    Allows per-model customization of behavior
+    """
+    temperature: float = Field(
+        default=0.7,
+        ge=0.0,
+        le=2.0,
+        description="Sampling temperature (0.0 = deterministic, 2.0 = very random)"
+    )
+
+    top_p: float = Field(
+        default=1.0,
+        ge=0.0,
+        le=1.0,
+        description="Nucleus sampling threshold"
+    )
+
+    max_tokens: int = Field(
+        default=2048,
+        ge=1,
+        description="Maximum tokens to generate"
+    )
+
+    frequency_penalty: Optional[float] = Field(
+        default=0.0,
+        ge=-2.0,
+        le=2.0,
+        description="Penalty for token frequency"
+    )
+
+    presence_penalty: Optional[float] = Field(
+        default=0.0,
+        ge=-2.0,
+        le=2.0,
+        description="Penalty for token presence"
+    )
+
+    stop: Optional[List[str]] = Field(
+        default=None,
+        description="Stop sequences"
+    )
+
+    class Config:
+        json_schema_extra = {
+            "example": {
+                "temperature": 0.7,
+                "top_p": 0.9,
+                "max_tokens": 2048
+            }
+        }
+
+
+class ModelResponse(BaseModel):
+    """
+    Response from a single model
+
+    Includes both the content and metadata about the query/response
+    """
+    model_id: str = Field(
+        ...,
+        description="Model identifier (e.g., 'gpt-4', 'claude-3-opus')"
+    )
+
+    anonymous_id: str = Field(
+        default_factory=lambda: f"response_{uuid.uuid4().hex[:8]}",
+        description="Anonymous identifier for peer evaluation"
+    )
+
+    content: str = Field(
+        ...,
+        description="The model's response text"
+    )
+
+    success: bool = Field(
+        default=True,
+        description="Whether the query succeeded"
+    )
+
+    error: Optional[str] = Field(
+        default=None,
+        description="Error message if query failed"
+    )
+
+    # Metadata
+    tokens_used: Optional[int] = Field(
+        default=None,
+        description="Total tokens used (prompt + completion)"
+    )
+
+    latency_ms: Optional[float] = Field(
+        default=None,
+        description="Response latency in milliseconds"
+    )
+
+    timestamp: datetime = Field(
+        default_factory=datetime.utcnow,
+        description="When the response was received"
+    )
+
+    parameters: Optional[ModelParameters] = Field(
+        default=None,
+        description="Parameters used for this query"
+    )
+
+    class Config:
+        json_schema_extra = {
+            "example": {
+                "model_id": "gpt-4",
+                "anonymous_id": "response_a3f2b1c4",
+                "content": "Quantum entanglement is a phenomenon...",
+                "success": True,
+                "tokens_used": 256,
+                "latency_ms": 1234.5,
+                "parameters": {
+                    "temperature": 0.7,
+                    "top_p": 0.9
+                }
+            }
+        }
+
+
+class AnonymousResponseMapping(BaseModel):
+    """
+    Bidirectional mapping between model IDs and anonymous IDs
+
+    Used to track which model produced which response while
+    maintaining anonymity during evaluation
+    """
+    model_to_anonymous: Dict[str, str] = Field(
+        default_factory=dict,
+        description="Map: model_id -> anonymous_id"
+    )
+
+    anonymous_to_model: Dict[str, str] = Field(
+        default_factory=dict,
+        description="Map: anonymous_id -> model_id"
+    )
+
+    def add_mapping(self, model_id: str, anonymous_id: str) -> None:
+        """Add a bidirectional mapping"""
+        self.model_to_anonymous[model_id] = anonymous_id
+        self.anonymous_to_model[anonymous_id] = model_id
+
+    def get_model_id(self, anonymous_id: str) -> Optional[str]:
+        """Get model ID from anonymous ID"""
+        return self.anonymous_to_model.get(anonymous_id)
+
+    def get_anonymous_id(self, model_id: str) -> Optional[str]:
+        """Get anonymous ID from model ID"""
+        return self.model_to_anonymous.get(model_id)
+
+    def reveal(self, anonymous_id: str) -> Optional[str]:
+        """Reveal which model produced an anonymous response"""
+        return self.get_model_id(anonymous_id)
+
+
+# ============================================================================
+# EVALUATION STRUCTURES
+# ============================================================================
+
+class EvaluationScores(BaseModel):
+    """
+    Scores for a single response across all criteria
+    """
+    accuracy: float = Field(
+        ...,
+        ge=0.0,
+        le=10.0,
+        description="Accuracy score (0-10)"
+    )
+
+    clarity: float = Field(
+        ...,
+        ge=0.0,
+        le=10.0,
+        description="Clarity score (0-10)"
+    )
+
+    completeness: float = Field(
+        ...,
+        ge=0.0,
+        le=10.0,
+        description="Completeness score (0-10)"
+    )
+
+    relevance: float = Field(
+        ...,
+        ge=0.0,
+        le=10.0,
+        description="Relevance score (0-10)"
+    )
+
+    def weighted_total(self, weights: Dict[str, float]) -> float:
+        """
+        Calculate weighted total score
+
+        Args:
+            weights: Dict mapping criterion name to weight (should sum to 1.0)
+
+        Returns:
+            Weighted score (0-10 scale)
+        """
+        total = (
+            self.accuracy * weights.get("accuracy", 0.25) +
+            self.clarity * weights.get("clarity", 0.25) +
+            self.completeness * weights.get("completeness", 0.25) +
+            self.relevance * weights.get("relevance", 0.25)
+        )
+        return total
+
+    def average(self) -> float:
+        """Calculate simple average across all criteria"""
+        return (self.accuracy + self.clarity + self.completeness + self.relevance) / 4.0
+
+    class Config:
+        json_schema_extra = {
+            "example": {
+                "accuracy": 8.5,
+                "clarity": 9.0,
+                "completeness": 7.5,
+                "relevance": 8.0
+            }
+        }
+
+
+class Evaluation(BaseModel):
+    """
+    Single evaluation of one response by one model
+    """
+    evaluator_model_id: str = Field(
+        ...,
+        description="Model that performed the evaluation"
+    )
+
+    target_anonymous_id: str = Field(
+        ...,
+        description="Anonymous ID of the response being evaluated"
+    )
+
+    scores: EvaluationScores = Field(
+        ...,
+        description="Scores across all criteria"
+    )
+
+    reasoning: Optional[str] = Field(
+        default=None,
+        description="Evaluator's reasoning for the scores"
+    )
+
+    raw_response: Optional[str] = Field(
+        default=None,
+        description="Raw evaluation response text (for debugging)"
+    )
+
+    timestamp: datetime = Field(
+        default_factory=datetime.utcnow,
+        description="When the evaluation was performed"
+    )
+
+    class Config:
+        json_schema_extra = {
+            "example": {
+                "evaluator_model_id": "claude-3-opus",
+                "target_anonymous_id": "response_a3f2b1c4",
+                "scores": {
+                    "accuracy": 8.5,
+                    "clarity": 9.0,
+                    "completeness": 7.5,
+                    "relevance": 8.0
+                },
+                "reasoning": "Strong technical explanation with clear examples..."
+            }
+        }
+
+
+class AggregatedScores(BaseModel):
+    """
+    Aggregated scores for a single response from all evaluators
+    """
+    anonymous_id: str = Field(
+        ...,
+        description="Anonymous ID of the response"
+    )
+
+    individual_scores: List[EvaluationScores] = Field(
+        default_factory=list,
+        description="All individual scores from different evaluators"
+    )
+
+    average_scores: Optional[EvaluationScores] = Field(
+        default=None,
+        description="Average across all evaluators"
+    )
+
+    weighted_total: Optional[float] = Field(
+        default=None,
+        description="Weighted total score using configured weights"
+    )
+
+    rank: Optional[int] = Field(
+        default=None,
+        description="Rank among all responses (1 = best)"
+    )
+
+    evaluator_count: int = Field(
+        default=0,
+        description="Number of evaluators who scored this response"
+    )
+
+    def calculate_average(self) -> EvaluationScores:
+        """Calculate average scores across all evaluators"""
+        if not self.individual_scores:
+            return EvaluationScores(
+                accuracy=0.0,
+                clarity=0.0,
+                completeness=0.0,
+                relevance=0.0
+            )
+
+        n = len(self.individual_scores)
+        return EvaluationScores(
+            accuracy=sum(s.accuracy for s in self.individual_scores) / n,
+            clarity=sum(s.clarity for s in self.individual_scores) / n,
+            completeness=sum(s.completeness for s in self.individual_scores) / n,
+            relevance=sum(s.relevance for s in self.individual_scores) / n
+        )
+
+    def calculate_weighted_total(self, weights: Dict[str, float]) -> float:
+        """Calculate weighted total using average scores"""
+        if not self.average_scores:
+            self.average_scores = self.calculate_average()
+        return self.average_scores.weighted_total(weights)
+
+
+# ============================================================================
+# SYNTHESIS STRUCTURES
+# ============================================================================
+
+class SynthesisInput(BaseModel):
+    """
+    Input data for the synthesis phase
+    """
+    original_question: str = Field(
+        ...,
+        description="The user's original question"
+    )
+
+    top_responses: List[ModelResponse] = Field(
+        ...,
+        description="Top-ranked responses to synthesize from"
+    )
+
+    scores: Dict[str, AggregatedScores] = Field(
+        ...,
+        description="Aggregated scores for all responses"
+    )
+
+    lead_model_id: str = Field(
+        ...,
+        description="Model selected to perform synthesis"
+    )
+
+    criteria_weights: Dict[str, float] = Field(
+        ...,
+        description="Weights used for evaluation"
+    )
+
+
+# ============================================================================
+# METADATA STRUCTURES
+# ============================================================================
+
+class CouncilMetadata(BaseModel):
+    """
+    Metadata passed through body["metadata"]["council_data"]
+
+    This structure enables communication between:
+    - Orchestrator pipe
+    - Filter functions
+    - Action functions
+    """
+    mode: CouncilMode = Field(
+        default=CouncilMode.INITIAL_QUERY,
+        description="Current processing mode"
+    )
+
+    session_id: str = Field(
+        default_factory=lambda: uuid.uuid4().hex,
+        description="Unique session ID for this Council invocation"
+    )
+
+    # Query phase data
+    models_queried: List[str] = Field(
+        default_factory=list,
+        description="List of model IDs queried"
+    )
+
+    # Response phase data
+    responses: List[ModelResponse] = Field(
+        default_factory=list,
+        description="All model responses"
+    )
+
+    anonymous_mapping: Optional[AnonymousResponseMapping] = Field(
+        default=None,
+        description="Mapping between model IDs and anonymous IDs"
+    )
+
+    # Evaluation phase data
+    evaluations: List[Evaluation] = Field(
+        default_factory=list,
+        description="All evaluations"
+    )
+
+    aggregated_scores: Dict[str, AggregatedScores] = Field(
+        default_factory=dict,
+        description="Aggregated scores by anonymous_id"
+    )
+
+    # Synthesis phase data
+    synthesis_input: Optional[SynthesisInput] = Field(
+        default=None,
+        description="Input for synthesis phase"
+    )
+
+    lead_model_id: Optional[str] = Field(
+        default=None,
+        description="Model selected for synthesis"
+    )
+
+    # Configuration
+    criteria_weights: Dict[str, float] = Field(
+        default_factory=lambda: {
+            "accuracy": 0.3,
+            "clarity": 0.25,
+            "completeness": 0.25,
+            "relevance": 0.2
+        },
+        description="Evaluation criteria weights"
+    )
+
+    # Timing & debugging
+    started_at: datetime = Field(
+        default_factory=datetime.utcnow,
+        description="When Council processing started"
+    )
+
+    completed_at: Optional[datetime] = Field(
+        default=None,
+        description="When Council processing completed"
+    )
+
+    debug_mode: bool = Field(
+        default=False,
+        description="Enable debug output"
+    )
+
+    class Config:
+        json_schema_extra = {
+            "example": {
+                "mode": "evaluation",
+                "session_id": "a1b2c3d4e5f6",
+                "models_queried": ["gpt-4", "claude-3-opus", "gemini-pro"],
+                "criteria_weights": {
+                    "accuracy": 0.3,
+                    "clarity": 0.25,
+                    "completeness": 0.25,
+                    "relevance": 0.2
+                }
+            }
+        }
+
+
+# ============================================================================
+# HELPER FUNCTIONS
+# ============================================================================
+
+def create_council_metadata() -> CouncilMetadata:
+    """Create a new CouncilMetadata instance with defaults"""
+    return CouncilMetadata()
+
+
+def extract_council_metadata(body: dict) -> Optional[CouncilMetadata]:
+    """
+    Extract CouncilMetadata from request body
+
+    Args:
+        body: Request body dict
+
+    Returns:
+        CouncilMetadata instance or None if not present
+    """
+    metadata = body.get("metadata", {})
+    council_data = metadata.get("council_data")
+
+    if council_data is None:
+        return None
+
+    try:
+        return CouncilMetadata(**council_data)
+    except Exception as e:
+        print(f"Error parsing CouncilMetadata: {e}")
+        return None
+
+
+def inject_council_metadata(body: dict, council_metadata: CouncilMetadata) -> dict:
+    """
+    Inject CouncilMetadata into request body
+
+    Args:
+        body: Request body dict
+        council_metadata: CouncilMetadata to inject
+
+    Returns:
+        Modified body with metadata injected
+    """
+    if "metadata" not in body:
+        body["metadata"] = {}
+
+    body["metadata"]["council_data"] = council_metadata.model_dump()
+
+    return body
+
+
+# ============================================================================
+# EXAMPLE USAGE
+# ============================================================================
+
+if __name__ == "__main__":
+    """
+    Example usage and validation of data structures
+    """
+    print("=== Council Data Structures - Examples ===\n")
+
+    # 1. Create model responses
+    print("1. Model Responses:")
+    response1 = ModelResponse(
+        model_id="gpt-4",
+        content="Quantum entanglement is a physical phenomenon...",
+        tokens_used=150,
+        latency_ms=1234.5,
+        parameters=ModelParameters(temperature=0.7)
+    )
+    print(f"   {response1.model_id} -> {response1.anonymous_id}")
+    print(f"   Tokens: {response1.tokens_used}, Latency: {response1.latency_ms}ms\n")
+
+    # 2. Anonymous mapping
+    print("2. Anonymous Mapping:")
+    mapping = AnonymousResponseMapping()
+    mapping.add_mapping("gpt-4", response1.anonymous_id)
+    mapping.add_mapping("claude-3-opus", "response_xyz789")
+    print(f"   Reveal {response1.anonymous_id}: {mapping.reveal(response1.anonymous_id)}\n")
+
+    # 3. Evaluation
+    print("3. Evaluation:")
+    eval1 = Evaluation(
+        evaluator_model_id="claude-3-opus",
+        target_anonymous_id=response1.anonymous_id,
+        scores=EvaluationScores(
+            accuracy=8.5,
+            clarity=9.0,
+            completeness=7.5,
+            relevance=8.0
+        ),
+        reasoning="Strong technical explanation with clear examples"
+    )
+    print(f"   Evaluator: {eval1.evaluator_model_id}")
+    print(f"   Average Score: {eval1.scores.average():.2f}\n")
+
+    # 4. Aggregated scores
+    print("4. Aggregated Scores:")
+    agg_scores = AggregatedScores(
+        anonymous_id=response1.anonymous_id,
+        individual_scores=[eval1.scores]
+    )
+    avg = agg_scores.calculate_average()
+    print(f"   Average: {avg.average():.2f}")
+    weights = {"accuracy": 0.3, "clarity": 0.25, "completeness": 0.25, "relevance": 0.2}
+    weighted = agg_scores.calculate_weighted_total(weights)
+    print(f"   Weighted Total: {weighted:.2f}\n")
+
+    # 5. Council metadata
+    print("5. Council Metadata:")
+    metadata = create_council_metadata()
+    metadata.mode = CouncilMode.EVALUATION
+    metadata.models_queried = ["gpt-4", "claude-3-opus", "gemini-pro"]
+    metadata.responses = [response1]
+    print(f"   Mode: {metadata.mode}")
+    print(f"   Session: {metadata.session_id}")
+    print(f"   Models: {len(metadata.models_queried)}\n")
+
+    print("✅ All data structures validated successfully!")
+
+
+# ============================================================================
+# MAIN COMPONENT CODE
+# ============================================================================
+
+class Filter:
+    """
+    Evaluation Prompt Filter
+
+    Injects evaluation instructions when Council is in evaluation mode.
+    Prompt is user-editable via Valves in Open WebUI UI!
+    """
+
+    class Valves(BaseModel):
+        """
+        User-configurable evaluation prompt template
+        """
+        PRIORITY: int = Field(
+            default=10,
+            description="Filter priority (higher runs first). Should run before model query."
+        )
+
+        EVALUATION_RUBRIC_TEMPLATE: str = Field(
+            default="""You are participating in an anonymous peer review of AI responses. Your task is to evaluate the following anonymous response objectively and critically.
+
+**EVALUATION CRITERIA** (Rate each 1-10, where 1=poor, 10=excellent):
+
+1. **ACCURACY** (Factual Correctness)
+   - Are the facts, data, and claims correct?
+   - Is the information up-to-date and reliable?
+   - Are there any factual errors or misconceptions?
+
+2. **CLARITY** (Understandability)
+   - Is the explanation clear and easy to understand?
+   - Is the language appropriate for the audience?
+   - Are complex concepts explained well?
+
+3. **COMPLETENESS** (Thoroughness)
+   - Does it fully address the question?
+   - Are important aspects covered?
+   - Is anything significant missing?
+
+4. **RELEVANCE** (On-Topic & Useful)
+   - Does it stay focused on the question?
+   - Is the information useful and applicable?
+   - Is there unnecessary tangential content?
+
+---
+
+**ANONYMOUS RESPONSE TO EVALUATE:**
+
+{response_text}
+
+---
+
+**YOUR EVALUATION:**
+
+Please provide your scores in this EXACT format (this is critical for parsing):
+
+ACCURACY: [your score 1-10]
+CLARITY: [your score 1-10]
+COMPLETENESS: [your score 1-10]
+RELEVANCE: [your score 1-10]
+REASONING: [2-3 sentences explaining your scores, focusing on strengths and weaknesses]
+
+Be critical but fair. Focus on objective quality, not stylistic preferences.""",
+            description="Evaluation prompt template. Use {response_text} as placeholder for the anonymous response."
+        )
+
+        ENABLE_DEBUG_LOGGING: bool = Field(
+            default=False,
+            description="Enable debug logging for this filter"
+        )
+
+    def __init__(self):
+        """Initialize the filter"""
+        self.valves = self.Valves()
+
+    def inlet(self, body: dict, __user__: Optional[dict] = None) -> dict:
+        """
+        Inlet: Called before the request goes to the model
+
+        Checks if Council is in evaluation mode, and if so, injects
+        the evaluation rubric prompt.
+
+        Args:
+            body: Request body containing messages, metadata, etc.
+            __user__: User information (optional)
+
+        Returns:
+            Modified body with evaluation prompt injected (if applicable)
+        """
+
+        # Extract Council metadata
+        metadata = extract_council_metadata(body)
+
+        # Only inject if in evaluation mode
+        if not metadata or metadata.mode != CouncilMode.EVALUATION:
+            # Not in evaluation mode, pass through unchanged
+            return body
+
+        # Get the anonymous response to evaluate from metadata
+        # The orchestrator should have placed this in body metadata
+        anonymous_response = body.get("metadata", {}).get("anonymous_response_text", "")
+
+        if not anonymous_response:
+            # No response to evaluate, pass through
+            if self.valves.ENABLE_DEBUG_LOGGING:
+                print("[Council Evaluation Filter] No anonymous response found in metadata")
+            return body
+
+        if self.valves.ENABLE_DEBUG_LOGGING:
+            print(f"[Council Evaluation Filter] Injecting evaluation prompt")
+            print(f"[Council Evaluation Filter] Response length: {len(anonymous_response)} chars")
+
+        # Format the evaluation rubric with the anonymous response
+        evaluation_prompt = self.valves.EVALUATION_RUBRIC_TEMPLATE.format(
+            response_text=anonymous_response
+        )
+
+        # Replace the last user message with the evaluation prompt
+        # (The orchestrator should have set this up appropriately)
+        if body.get("messages") and len(body["messages"]) > 0:
+            # Find the last user message
+            for i in range(len(body["messages"]) - 1, -1, -1):
+                if body["messages"][i].get("role") == "user":
+                    body["messages"][i]["content"] = evaluation_prompt
+                    break
+        else:
+            # No messages found, create one
+            body["messages"] = [
+                {
+                    "role": "user",
+                    "content": evaluation_prompt
+                }
+            ]
+
+        if self.valves.ENABLE_DEBUG_LOGGING:
+            print(f"[Council Evaluation Filter] Prompt injected successfully")
+
+        return body
+
+
+# Module metadata
+__version__ = "0.1.0"
+__author__ = "Council Pipeline Team"
+__description__ = "Evaluation prompt filter with user-editable rubric"
