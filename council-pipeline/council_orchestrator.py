@@ -62,7 +62,12 @@ class Pipe:
         # ============================================================
         MODELS_TO_QUERY: str = Field(
             default="gpt-5.1,anthropic/claude-sonnet-4.5,groq.moonshotai/kimi-k2-instruct",
-            description="Comma-separated list of model IDs to query"
+            description="Comma-separated list of model IDs to query for initial responses"
+        )
+
+        EVALUATION_MODELS: str = Field(
+            default="",
+            description="Comma-separated list of model IDs to use for evaluation (leave empty to use same models as MODELS_TO_QUERY)"
         )
 
         LEAD_SYNTHESIZER: str = Field(
@@ -348,6 +353,7 @@ class Pipe:
 
         # Internal state
         self.available_models: List[str] = []
+        self.evaluation_models: List[str] = []  # Models used for evaluation (can differ from generation models)
         self.token_usage: int = 0
         self._last_models_string: str = ""  # Cache to avoid re-parsing
 
@@ -748,7 +754,7 @@ class Pipe:
         metadata.mode = CouncilMode.EVALUATION
 
         if self.valves.SHOW_PROGRESS:
-            expected_evals = len(successful_responses) * len(successful_responses)
+            expected_evals = len(successful_responses) * len(self.evaluation_models)
             yield f"✓ Collected {len(evaluations)}/{expected_evals} evaluations (gathered in parallel with queries)"
 
             # Warn if many evaluations failed
@@ -1102,10 +1108,11 @@ class Pipe:
         return "\n".join(lines)
 
     def _parse_models(self) -> List[str]:
-        """Parse model list from Valves (with caching to avoid unnecessary re-parsing)"""
+        """Parse model lists from Valves (with caching to avoid unnecessary re-parsing)"""
         raw_string = self.valves.MODELS_TO_QUERY
+        raw_eval_string = self.valves.EVALUATION_MODELS
 
-        # Skip parsing if the string hasn't changed
+        # Skip parsing if the strings haven't changed
         if raw_string == self._last_models_string and self.available_models:
             if self.valves.DEBUG_MODE:
                 print(f"[Council] Model list unchanged, using cached {len(self.available_models)} models")
@@ -1114,13 +1121,27 @@ class Pipe:
         if self.valves.DEBUG_MODE:
             print(f"[Council] Raw MODELS_TO_QUERY string (len={len(raw_string)}): {raw_string[:200]}...")
 
+        # Parse generation models
         models = [m.strip() for m in raw_string.split(",") if m.strip()]
 
         if self.valves.DEBUG_MODE:
-            print(f"[Council] Parsed {len(models)} models: {models}")
+            print(f"[Council] Parsed {len(models)} generation models: {models}")
 
         self.available_models = models
         self._last_models_string = raw_string
+
+        # Parse evaluation models (defaults to same as generation models if not specified)
+        if raw_eval_string and raw_eval_string.strip():
+            eval_models = [m.strip() for m in raw_eval_string.split(",") if m.strip()]
+            if self.valves.DEBUG_MODE:
+                print(f"[Council] Parsed {len(eval_models)} evaluation models: {eval_models}")
+        else:
+            eval_models = models  # Use same models for evaluation
+            if self.valves.DEBUG_MODE:
+                print(f"[Council] Using same {len(eval_models)} models for evaluation")
+
+        self.evaluation_models = eval_models
+
         return models
 
     def _get_model_params(self) -> Dict[str, ModelParameters]:
@@ -1872,13 +1893,10 @@ class Pipe:
         metadata: CouncilMetadata,
     ) -> List[Evaluation]:
         """
-        Distribute anonymous responses to all models for evaluation
+        Distribute anonymous responses to evaluation models for scoring
 
-        Each model evaluates ALL anonymous responses, including their own
-        (without knowing which is theirs). This strengthens peer review by:
-        - Adding more evaluation data points
-        - Preventing unconscious bias from skipping self-evaluation
-        - Testing whether models can objectively evaluate their own work
+        Each evaluation model evaluates ALL anonymous responses.
+        Uses self.evaluation_models which may differ from generation models.
 
         All evaluations run in parallel for maximum performance.
         """
@@ -1887,16 +1905,15 @@ class Pipe:
 
         # Build list of all evaluation tasks (all independent, can run in parallel)
         tasks = []
-        for evaluator in responses:
+        for evaluator_model_id in self.evaluation_models:
             for target in responses:
-                # Note: Models evaluate ALL responses including their own (anonymously)
                 if self.valves.DEBUG_MODE:
-                    print(f"[Council] Queuing: {evaluator.model_id} evaluating {target.anonymous_id}")
+                    print(f"[Council] Queuing: {evaluator_model_id} evaluating {target.anonymous_id}")
 
                 task = self._query_for_evaluation(
-                    evaluator_model_id=evaluator.model_id,
+                    evaluator_model_id=evaluator_model_id,
                     target_response=target,
-                    params=model_params[evaluator.model_id],
+                    params=model_params.get(evaluator_model_id, model_params[self.available_models[0]]),
                     request=request,
                     user=user,
                     metadata=metadata

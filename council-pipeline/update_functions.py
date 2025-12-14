@@ -73,19 +73,25 @@ API_KEY = get_credential("OPENWEBUI_API_KEY", "OPENWEBUI_API_KEY_COMMAND", "")
 # Function name patterns to match
 COUNCIL_FUNCTION_PATTERNS = [
     "Council of LLMs Orchestrator",
+    "LLM Writer's Room",
     "Council Evaluation Filter",
     "Council Synthesis Filter",
     "Council Score Extraction Filter",
-    "Council Show Details Action"
+    "Council Show Details Action",
+    "LLM Roundtable",
+    "LLM En Banc"
 ]
 
 # JSON files to import (in order)
 JSON_FILES = [
     "council_orchestrator.json",
+    "writers_room_orchestrator.json",
     "council_evaluation_filter.json",
     "council_synthesis_filter.json",
     "council_score_extraction_filter.json",
-    "council_show_details_action.json"
+    "council_show_details_action.json",
+    "llm_roundtable.json",
+    "llm_en_banc.json"
 ]
 
 class OpenWebUIUpdater:

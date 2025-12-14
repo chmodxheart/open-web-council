@@ -1,10 +1,21 @@
 # Council of LLMs
 
-A multi-LLM consultation system with anonymous peer review for [Open WebUI](https://github.com/open-webui/open-webui).
+A suite of multi-LLM tools for [Open WebUI](https://github.com/open-webui/open-webui) featuring parallel querying, peer evaluation, and intelligent synthesis.
+
+## Tools
+
+This project provides four complementary tools:
+
+1. **Council of LLMs** - Full pipeline with anonymous peer review and synthesis
+2. **LLM Writer's Room** - Creative writing variant with human-like voice optimization
+3. **LLM Roundtable** - Query multiple models simultaneously, see all responses
+4. **LLM En Banc** - Have multiple models evaluate a response
 
 ## Overview
 
-Council of LLMs enables consultation across multiple language models with unbiased peer evaluation and intelligent synthesis. Inspired by academic peer review processes, the system:
+### Council of LLMs
+
+The full Council enables consultation across multiple language models with unbiased peer evaluation and intelligent synthesis. Inspired by academic peer review processes, the system:
 
 1. **Distributes** queries to multiple LLMs simultaneously
 2. **Anonymizes** responses to prevent evaluation bias
@@ -54,39 +65,81 @@ User receives synthesized result with optional transparency
 - **NEW**: Token usage tracking per model and phase
 - **NEW**: Cost estimation with per-model pricing
 
+### LLM Writer's Room
+
+A creative writing-focused variant of the Council system, specifically designed to produce human-like, emotionally resonant prose while avoiding common LLM artifacts. Uses the same peer review architecture but with creative writing-specific evaluation criteria:
+
+- **Voice Authenticity** - Human-like voice, avoids LLM artifacts
+- **Emotional Resonance** - Shows emotions through action/detail, not abstract statements
+- **Originality & Risk-Taking** - Fresh metaphors, avoids clichés and safe choices
+- **Style Consistency** - Maintains unified voice and matches creative brief
+- **Narrative Coherence** - Clear structure without forced tidy endings
+- **LLM Artifact Avoidance** - Explicitly penalizes AI-sounding patterns
+
+Perfect for:
+- Fiction writing (scenes, chapters, short stories)
+- Creative copy with personality
+- Dialogue that sounds natural
+- Poetry and literary prose
+- Any writing that needs to feel human-authored
+
+See [Writer's Room Documentation](council-pipeline/WRITERS_ROOM_README.md) for details.
+
+### LLM Roundtable
+
+Query multiple models in parallel and see all responses side-by-side. Perfect for:
+- Comparing different model perspectives
+- Getting diverse creative ideas
+- Seeing how models handle the same question
+
+### LLM En Banc
+
+Have multiple models evaluate and score a response. Great for:
+- Quality-checking AI-generated content
+- Getting peer review on answers
+- Fact-checking and completeness assessment
+
 ## Quick Start
 
 ### Prerequisites
 
 - Python 3.11+
 - Open WebUI running with Pipelines support
-- At least 3 LLM models configured in Open WebUI
+- At least 2-3 LLM models configured in Open WebUI
 
 ### Installation
 
+Choose which tools you want to install:
+
+#### Council of LLMs (Full Pipeline)
+
 1. **Download** `council_orchestrator.json` from `council-pipeline/`
+2. **Import**: Admin Panel -> Functions -> Import Function
+3. **Configure**: Set `MODELS_TO_QUERY` in Valves (e.g., `gpt-5.1,o3,anthropic/claude-sonnet-4.5`)
+4. **Use**: Select "Council of LLMs" from model dropdown
 
-2. **Import into Open WebUI**:
-   - Navigate to Admin Panel -> Functions
-   - Click "Import Function"
-   - Upload `council_orchestrator.json`
+#### LLM Roundtable
 
-3. **Configure**:
-   - Set `MODELS_TO_QUERY` in the Valves panel (e.g., `gpt-4,claude-3-opus,gemini-pro`)
+1. **Download** `llm_roundtable.json` from `council-pipeline/`
+2. **Import**: Admin Panel -> Functions -> Import Function
+3. **Configure**: Set `MODELS_TO_QUERY` in Valves
+4. **Use**: Select "LLM Roundtable" from model dropdown, ask any question
 
-4. **Use**:
-   - Select "Council of LLMs" from the model dropdown
-   - Ask your question
-   - Receive a synthesized answer from multiple LLMs
+#### LLM En Banc
 
-### Minimum Configuration
+1. **Download** `llm_en_banc.json` from `council-pipeline/`
+2. **Import**: Admin Panel -> Functions -> Import Function
+3. **Configure**: Set `MODELS_TO_QUERY` in Valves
+4. **Use**: Select "LLM En Banc" from model dropdown, paste response to evaluate
 
-Set `MODELS_TO_QUERY` in Orchestrator Valves:
+### Default Configuration
+
+All tools default to:
 ```
-gpt-4,claude-3-opus,gemini-pro
+MODELS_TO_QUERY = gpt-5.1,o3,anthropic/claude-sonnet-4.5
 ```
 
-Models should match the model IDs available in your Open WebUI instance.
+Change this to match model IDs available in your Open WebUI instance.
 
 ## Features
 

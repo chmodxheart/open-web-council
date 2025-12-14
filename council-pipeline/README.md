@@ -9,13 +9,24 @@
 
 ## Files
 
-### Core Files
+### Core Tools
 
 | File | Description |
 |------|-------------|
-| `council_orchestrator.py` | Main orchestrator pipe (v0.6.0) |
+| `council_orchestrator.py` | Full Council pipeline (v0.6.0) |
+| `writers_room_orchestrator.py` | Creative writing variant with creative rubrics (v0.1.0) |
+| `llm_roundtable.py` | Parallel multi-model query (v0.1.0) |
+| `llm_en_banc.py` | Multi-model response evaluation (v0.1.0) |
 | `schemas.py` | Shared data structures |
-| `council_orchestrator.json` | Ready-to-import JSON for Open WebUI |
+
+### Ready-to-Import JSON Files
+
+| File | Description |
+|------|-------------|
+| `council_orchestrator.json` | Council of LLMs (full pipeline) |
+| `writers_room_orchestrator.json` | Writer's Room (creative writing focused) |
+| `llm_roundtable.json` | LLM Roundtable (parallel query) |
+| `llm_en_banc.json` | LLM En Banc (evaluation) |
 
 ### Supporting Components (Optional)
 
@@ -68,6 +79,7 @@ This creates bundled versions with inlined schemas and generates JSON exports re
 ## Additional Documentation
 
 - **User Guide**: [Main README](../README.md)
+- **Writer's Room Guide**: [WRITERS_ROOM_README.md](WRITERS_ROOM_README.md) - Creative writing variant
 - **Release Notes**: `V0.6.0-RELEASE-NOTES.md`
 - **Configuration Presets**: `QUICK-CONFIG-REFERENCE.md`
 - **Testing Guide**: `TESTING-CONFIG-ALL-MODELS.md`

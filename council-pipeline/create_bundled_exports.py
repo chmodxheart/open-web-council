@@ -168,24 +168,31 @@ def main():
     print("Creating bundled Open WebUI exports...")
 
     # Read schemas content
-    print("\n[1/6] Reading schemas.py...")
+    print("\n[1/9] Reading schemas.py...")
     schemas_content = extract_schemas_content()
 
     # Create bundled versions
     components = [
         ("council_orchestrator", "pipe", "council_orchestrator.py"),
+        ("writers_room_orchestrator", "pipe", "writers_room_orchestrator.py"),
         ("council_evaluation_filter", "filter", "council_evaluation_filter.py"),
         ("council_synthesis_filter", "filter", "council_synthesis_filter.py"),
         ("council_score_extraction_filter", "filter", "council_score_extraction_filter.py"),
         ("council_show_details_action", "action", "council_show_details_action.py"),
+        ("llm_roundtable", "manifold", "llm_roundtable.py"),
+        ("llm_en_banc", "manifold", "llm_en_banc.py"),
     ]
 
     exports = []
 
     for i, (component_name, component_type, filename) in enumerate(components, start=2):
-        print(f"\n[{i}/6] Creating bundled {component_name}...")
+        print(f"\n[{i}/9] Creating bundled {component_name}...")
 
-        bundled_content = create_bundled_pipe(filename, schemas_content)
+        # LLM Roundtable and En Banc don't use schemas, so don't bundle
+        if component_name in ["llm_roundtable", "llm_en_banc"]:
+            bundled_content = read_file(filename)
+        else:
+            bundled_content = create_bundled_pipe(filename, schemas_content)
 
         # Save bundled version
         bundled_filename = f"bundled_{filename}"
@@ -198,7 +205,7 @@ def main():
         exports.append(export)
 
     # Save individual JSON files
-    print("\n[6/6] Creating JSON exports...")
+    print("\n[9/9] Creating JSON exports...")
     for export in exports:
         json_filename = f"{export['id']}.json"
         with open(json_filename, 'w', encoding='utf-8') as f:

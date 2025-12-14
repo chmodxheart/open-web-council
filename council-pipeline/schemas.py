@@ -12,7 +12,7 @@ Design Philosophy:
 """
 
 from pydantic import BaseModel, Field, validator
-from typing import Dict, List, Optional, Any, Literal
+from typing import Dict, List, Optional, Any, Literal, Union
 from datetime import datetime
 from enum import Enum
 import uuid
@@ -154,6 +154,19 @@ class ModelResponse(BaseModel):
         description="Parameters used for this query"
     )
 
+    # Verbalized Sampling Support
+    response_index: Optional[int] = Field(
+        default=None,
+        description="Response variant index (1-N) for verbalized sampling. None for single responses."
+    )
+
+    probability: Optional[float] = Field(
+        default=None,
+        ge=0.0,
+        le=1.0,
+        description="Probability score from verbalized sampling (0.0-1.0). None for single responses."
+    )
+
     class Config:
         json_schema_extra = {
             "example": {
@@ -177,28 +190,37 @@ class AnonymousResponseMapping(BaseModel):
 
     Used to track which model produced which response while
     maintaining anonymity during evaluation
+
+    Supports both single responses (model -> anonymous_id) and multiple
+    responses per model (model -> list of anonymous_ids) for verbalized sampling
     """
-    model_to_anonymous: Dict[str, str] = Field(
+    model_to_anonymous: Dict[str, Union[str, List[str]]] = Field(
         default_factory=dict,
-        description="Map: model_id -> anonymous_id"
+        description="Map: model_id -> anonymous_id (single) or List[anonymous_id] (multiple for verbalized sampling)"
     )
 
     anonymous_to_model: Dict[str, str] = Field(
         default_factory=dict,
-        description="Map: anonymous_id -> model_id"
+        description="Map: anonymous_id -> model_id (always 1:1)"
     )
 
     def add_mapping(self, model_id: str, anonymous_id: str) -> None:
-        """Add a bidirectional mapping"""
+        """Add a bidirectional mapping for a single response"""
         self.model_to_anonymous[model_id] = anonymous_id
         self.anonymous_to_model[anonymous_id] = model_id
+
+    def add_multi_mapping(self, model_id: str, anonymous_ids: List[str]) -> None:
+        """Add mapping for multiple responses from same model (verbalized sampling)"""
+        self.model_to_anonymous[model_id] = anonymous_ids
+        for anon_id in anonymous_ids:
+            self.anonymous_to_model[anon_id] = model_id
 
     def get_model_id(self, anonymous_id: str) -> Optional[str]:
         """Get model ID from anonymous ID"""
         return self.anonymous_to_model.get(anonymous_id)
 
-    def get_anonymous_id(self, model_id: str) -> Optional[str]:
-        """Get anonymous ID from model ID"""
+    def get_anonymous_id(self, model_id: str) -> Optional[Union[str, List[str]]]:
+        """Get anonymous ID(s) from model ID. Returns single string or list depending on mapping."""
         return self.model_to_anonymous.get(model_id)
 
     def reveal(self, anonymous_id: str) -> Optional[str]:
@@ -275,9 +297,101 @@ class EvaluationScores(BaseModel):
         }
 
 
+class CreativeWritingScores(BaseModel):
+    """
+    Scores for creative writing evaluation across 6 criteria
+    Used by Writer's Room instead of standard EvaluationScores
+    """
+    voice_authenticity: float = Field(
+        ...,
+        ge=0.0,
+        le=10.0,
+        description="Voice authenticity score - human-like voice, avoids LLM artifacts (0-10)"
+    )
+
+    emotional_resonance: float = Field(
+        ...,
+        ge=0.0,
+        le=10.0,
+        description="Emotional resonance score - shows emotions through action/detail (0-10)"
+    )
+
+    originality: float = Field(
+        ...,
+        ge=0.0,
+        le=10.0,
+        description="Originality score - fresh metaphors, avoids clichés (0-10)"
+    )
+
+    style_consistency: float = Field(
+        ...,
+        ge=0.0,
+        le=10.0,
+        description="Style consistency score - maintains unified voice (0-10)"
+    )
+
+    narrative_coherence: float = Field(
+        ...,
+        ge=0.0,
+        le=10.0,
+        description="Narrative coherence score - clear structure and flow (0-10)"
+    )
+
+    llm_artifact_avoidance: float = Field(
+        ...,
+        ge=0.0,
+        le=10.0,
+        description="LLM artifact avoidance score - explicitly penalizes AI-sounding patterns (0-10)"
+    )
+
+    def weighted_total(self, weights: Dict[str, float]) -> float:
+        """
+        Calculate weighted total score
+
+        Args:
+            weights: Dict mapping criterion name to weight (should sum to 1.0)
+
+        Returns:
+            Weighted score (0-10 scale)
+        """
+        total = (
+            self.voice_authenticity * weights.get("voice_authenticity", 0.25) +
+            self.emotional_resonance * weights.get("emotional_resonance", 0.20) +
+            self.originality * weights.get("originality", 0.20) +
+            self.style_consistency * weights.get("style_consistency", 0.15) +
+            self.narrative_coherence * weights.get("narrative_coherence", 0.15) +
+            self.llm_artifact_avoidance * weights.get("llm_artifact_avoidance", 0.05)
+        )
+        return total
+
+    def average(self) -> float:
+        """Calculate simple average across all criteria"""
+        return (
+            self.voice_authenticity +
+            self.emotional_resonance +
+            self.originality +
+            self.style_consistency +
+            self.narrative_coherence +
+            self.llm_artifact_avoidance
+        ) / 6.0
+
+    class Config:
+        json_schema_extra = {
+            "example": {
+                "voice_authenticity": 8.5,
+                "emotional_resonance": 9.0,
+                "originality": 7.5,
+                "style_consistency": 8.0,
+                "narrative_coherence": 8.5,
+                "llm_artifact_avoidance": 7.0
+            }
+        }
+
+
 class Evaluation(BaseModel):
     """
     Single evaluation of one response by one model
+    Supports both standard (EvaluationScores) and creative writing (CreativeWritingScores) scoring
     """
     evaluator_model_id: str = Field(
         ...,
@@ -289,9 +403,9 @@ class Evaluation(BaseModel):
         description="Anonymous ID of the response being evaluated"
     )
 
-    scores: EvaluationScores = Field(
+    scores: Union[EvaluationScores, 'CreativeWritingScores'] = Field(
         ...,
-        description="Scores across all criteria"
+        description="Scores across all criteria (supports both EvaluationScores and CreativeWritingScores)"
     )
 
     reasoning: Optional[str] = Field(
@@ -328,18 +442,19 @@ class Evaluation(BaseModel):
 class AggregatedScores(BaseModel):
     """
     Aggregated scores for a single response from all evaluators
+    Supports both standard (EvaluationScores) and creative writing (CreativeWritingScores) scoring
     """
     anonymous_id: str = Field(
         ...,
         description="Anonymous ID of the response"
     )
 
-    individual_scores: List[EvaluationScores] = Field(
+    individual_scores: List[Union[EvaluationScores, 'CreativeWritingScores']] = Field(
         default_factory=list,
         description="All individual scores from different evaluators"
     )
 
-    average_scores: Optional[EvaluationScores] = Field(
+    average_scores: Optional[Union[EvaluationScores, 'CreativeWritingScores']] = Field(
         default=None,
         description="Average across all evaluators"
     )
@@ -359,23 +474,44 @@ class AggregatedScores(BaseModel):
         description="Number of evaluators who scored this response"
     )
 
-    def calculate_average(self) -> EvaluationScores:
-        """Calculate average scores across all evaluators"""
+    def calculate_average(self) -> Union[EvaluationScores, 'CreativeWritingScores']:
+        """Calculate average scores across all evaluators (supports both score types)"""
         if not self.individual_scores:
-            return EvaluationScores(
-                accuracy=0.0,
-                clarity=0.0,
-                completeness=0.0,
-                relevance=0.0
-            )
+            # Return appropriate empty score based on type
+            if isinstance(self.individual_scores, list) and len(self.individual_scores) == 0:
+                # Default to EvaluationScores for empty list
+                return EvaluationScores(
+                    accuracy=0.0,
+                    clarity=0.0,
+                    completeness=0.0,
+                    relevance=0.0
+                )
 
+        # Detect score type from first element
+        first_score = self.individual_scores[0]
         n = len(self.individual_scores)
-        return EvaluationScores(
-            accuracy=sum(s.accuracy for s in self.individual_scores) / n,
-            clarity=sum(s.clarity for s in self.individual_scores) / n,
-            completeness=sum(s.completeness for s in self.individual_scores) / n,
-            relevance=sum(s.relevance for s in self.individual_scores) / n
-        )
+
+        if isinstance(first_score, EvaluationScores):
+            # Standard 4-criterion evaluation
+            return EvaluationScores(
+                accuracy=sum(s.accuracy for s in self.individual_scores) / n,
+                clarity=sum(s.clarity for s in self.individual_scores) / n,
+                completeness=sum(s.completeness for s in self.individual_scores) / n,
+                relevance=sum(s.relevance for s in self.individual_scores) / n
+            )
+        else:
+            # Creative writing 6-criterion evaluation (CreativeWritingScores type)
+            # Note: We can't directly construct it here due to forward reference,
+            # so we need to get the class from the first element's type
+            score_type = type(first_score)
+            return score_type(
+                voice_authenticity=sum(s.voice_authenticity for s in self.individual_scores) / n,
+                emotional_resonance=sum(s.emotional_resonance for s in self.individual_scores) / n,
+                originality=sum(s.originality for s in self.individual_scores) / n,
+                style_consistency=sum(s.style_consistency for s in self.individual_scores) / n,
+                narrative_coherence=sum(s.narrative_coherence for s in self.individual_scores) / n,
+                llm_artifact_avoidance=sum(s.llm_artifact_avoidance for s in self.individual_scores) / n
+            )
 
     def calculate_weighted_total(self, weights: Dict[str, float]) -> float:
         """Calculate weighted total using average scores"""

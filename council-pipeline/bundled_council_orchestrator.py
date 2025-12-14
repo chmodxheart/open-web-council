@@ -35,7 +35,7 @@ from datetime import datetime
 
 
 from pydantic import BaseModel, Field, validator
-from typing import Dict, List, Optional, Any, Literal
+from typing import Dict, List, Optional, Any, Literal, Union
 from datetime import datetime
 from enum import Enum
 import uuid
@@ -298,9 +298,101 @@ class EvaluationScores(BaseModel):
         }
 
 
+class CreativeWritingScores(BaseModel):
+    """
+    Scores for creative writing evaluation across 6 criteria
+    Used by Writer's Room instead of standard EvaluationScores
+    """
+    voice_authenticity: float = Field(
+        ...,
+        ge=0.0,
+        le=10.0,
+        description="Voice authenticity score - human-like voice, avoids LLM artifacts (0-10)"
+    )
+
+    emotional_resonance: float = Field(
+        ...,
+        ge=0.0,
+        le=10.0,
+        description="Emotional resonance score - shows emotions through action/detail (0-10)"
+    )
+
+    originality: float = Field(
+        ...,
+        ge=0.0,
+        le=10.0,
+        description="Originality score - fresh metaphors, avoids clichés (0-10)"
+    )
+
+    style_consistency: float = Field(
+        ...,
+        ge=0.0,
+        le=10.0,
+        description="Style consistency score - maintains unified voice (0-10)"
+    )
+
+    narrative_coherence: float = Field(
+        ...,
+        ge=0.0,
+        le=10.0,
+        description="Narrative coherence score - clear structure and flow (0-10)"
+    )
+
+    llm_artifact_avoidance: float = Field(
+        ...,
+        ge=0.0,
+        le=10.0,
+        description="LLM artifact avoidance score - explicitly penalizes AI-sounding patterns (0-10)"
+    )
+
+    def weighted_total(self, weights: Dict[str, float]) -> float:
+        """
+        Calculate weighted total score
+
+        Args:
+            weights: Dict mapping criterion name to weight (should sum to 1.0)
+
+        Returns:
+            Weighted score (0-10 scale)
+        """
+        total = (
+            self.voice_authenticity * weights.get("voice_authenticity", 0.25) +
+            self.emotional_resonance * weights.get("emotional_resonance", 0.20) +
+            self.originality * weights.get("originality", 0.20) +
+            self.style_consistency * weights.get("style_consistency", 0.15) +
+            self.narrative_coherence * weights.get("narrative_coherence", 0.15) +
+            self.llm_artifact_avoidance * weights.get("llm_artifact_avoidance", 0.05)
+        )
+        return total
+
+    def average(self) -> float:
+        """Calculate simple average across all criteria"""
+        return (
+            self.voice_authenticity +
+            self.emotional_resonance +
+            self.originality +
+            self.style_consistency +
+            self.narrative_coherence +
+            self.llm_artifact_avoidance
+        ) / 6.0
+
+    class Config:
+        json_schema_extra = {
+            "example": {
+                "voice_authenticity": 8.5,
+                "emotional_resonance": 9.0,
+                "originality": 7.5,
+                "style_consistency": 8.0,
+                "narrative_coherence": 8.5,
+                "llm_artifact_avoidance": 7.0
+            }
+        }
+
+
 class Evaluation(BaseModel):
     """
     Single evaluation of one response by one model
+    Supports both standard (EvaluationScores) and creative writing (CreativeWritingScores) scoring
     """
     evaluator_model_id: str = Field(
         ...,
@@ -312,9 +404,9 @@ class Evaluation(BaseModel):
         description="Anonymous ID of the response being evaluated"
     )
 
-    scores: EvaluationScores = Field(
+    scores: Union[EvaluationScores, 'CreativeWritingScores'] = Field(
         ...,
-        description="Scores across all criteria"
+        description="Scores across all criteria (supports both EvaluationScores and CreativeWritingScores)"
     )
 
     reasoning: Optional[str] = Field(
@@ -351,18 +443,19 @@ class Evaluation(BaseModel):
 class AggregatedScores(BaseModel):
     """
     Aggregated scores for a single response from all evaluators
+    Supports both standard (EvaluationScores) and creative writing (CreativeWritingScores) scoring
     """
     anonymous_id: str = Field(
         ...,
         description="Anonymous ID of the response"
     )
 
-    individual_scores: List[EvaluationScores] = Field(
+    individual_scores: List[Union[EvaluationScores, 'CreativeWritingScores']] = Field(
         default_factory=list,
         description="All individual scores from different evaluators"
     )
 
-    average_scores: Optional[EvaluationScores] = Field(
+    average_scores: Optional[Union[EvaluationScores, 'CreativeWritingScores']] = Field(
         default=None,
         description="Average across all evaluators"
     )
@@ -382,23 +475,44 @@ class AggregatedScores(BaseModel):
         description="Number of evaluators who scored this response"
     )
 
-    def calculate_average(self) -> EvaluationScores:
-        """Calculate average scores across all evaluators"""
+    def calculate_average(self) -> Union[EvaluationScores, 'CreativeWritingScores']:
+        """Calculate average scores across all evaluators (supports both score types)"""
         if not self.individual_scores:
-            return EvaluationScores(
-                accuracy=0.0,
-                clarity=0.0,
-                completeness=0.0,
-                relevance=0.0
-            )
+            # Return appropriate empty score based on type
+            if isinstance(self.individual_scores, list) and len(self.individual_scores) == 0:
+                # Default to EvaluationScores for empty list
+                return EvaluationScores(
+                    accuracy=0.0,
+                    clarity=0.0,
+                    completeness=0.0,
+                    relevance=0.0
+                )
 
+        # Detect score type from first element
+        first_score = self.individual_scores[0]
         n = len(self.individual_scores)
-        return EvaluationScores(
-            accuracy=sum(s.accuracy for s in self.individual_scores) / n,
-            clarity=sum(s.clarity for s in self.individual_scores) / n,
-            completeness=sum(s.completeness for s in self.individual_scores) / n,
-            relevance=sum(s.relevance for s in self.individual_scores) / n
-        )
+
+        if isinstance(first_score, EvaluationScores):
+            # Standard 4-criterion evaluation
+            return EvaluationScores(
+                accuracy=sum(s.accuracy for s in self.individual_scores) / n,
+                clarity=sum(s.clarity for s in self.individual_scores) / n,
+                completeness=sum(s.completeness for s in self.individual_scores) / n,
+                relevance=sum(s.relevance for s in self.individual_scores) / n
+            )
+        else:
+            # Creative writing 6-criterion evaluation (CreativeWritingScores type)
+            # Note: We can't directly construct it here due to forward reference,
+            # so we need to get the class from the first element's type
+            score_type = type(first_score)
+            return score_type(
+                voice_authenticity=sum(s.voice_authenticity for s in self.individual_scores) / n,
+                emotional_resonance=sum(s.emotional_resonance for s in self.individual_scores) / n,
+                originality=sum(s.originality for s in self.individual_scores) / n,
+                style_consistency=sum(s.style_consistency for s in self.individual_scores) / n,
+                narrative_coherence=sum(s.narrative_coherence for s in self.individual_scores) / n,
+                llm_artifact_avoidance=sum(s.llm_artifact_avoidance for s in self.individual_scores) / n
+            )
 
     def calculate_weighted_total(self, weights: Dict[str, float]) -> float:
         """Calculate weighted total using average scores"""
@@ -689,7 +803,12 @@ class Pipe:
         # ============================================================
         MODELS_TO_QUERY: str = Field(
             default="gpt-5.1,anthropic/claude-sonnet-4.5,groq.moonshotai/kimi-k2-instruct",
-            description="Comma-separated list of model IDs to query"
+            description="Comma-separated list of model IDs to query for initial responses"
+        )
+
+        EVALUATION_MODELS: str = Field(
+            default="",
+            description="Comma-separated list of model IDs to use for evaluation (leave empty to use same models as MODELS_TO_QUERY)"
         )
 
         LEAD_SYNTHESIZER: str = Field(
@@ -975,6 +1094,7 @@ class Pipe:
 
         # Internal state
         self.available_models: List[str] = []
+        self.evaluation_models: List[str] = []  # Models used for evaluation (can differ from generation models)
         self.token_usage: int = 0
         self._last_models_string: str = ""  # Cache to avoid re-parsing
 
@@ -1375,7 +1495,7 @@ class Pipe:
         metadata.mode = CouncilMode.EVALUATION
 
         if self.valves.SHOW_PROGRESS:
-            expected_evals = len(successful_responses) * len(successful_responses)
+            expected_evals = len(successful_responses) * len(self.evaluation_models)
             yield f"✓ Collected {len(evaluations)}/{expected_evals} evaluations (gathered in parallel with queries)"
 
             # Warn if many evaluations failed
@@ -1729,10 +1849,11 @@ class Pipe:
         return "\n".join(lines)
 
     def _parse_models(self) -> List[str]:
-        """Parse model list from Valves (with caching to avoid unnecessary re-parsing)"""
+        """Parse model lists from Valves (with caching to avoid unnecessary re-parsing)"""
         raw_string = self.valves.MODELS_TO_QUERY
+        raw_eval_string = self.valves.EVALUATION_MODELS
 
-        # Skip parsing if the string hasn't changed
+        # Skip parsing if the strings haven't changed
         if raw_string == self._last_models_string and self.available_models:
             if self.valves.DEBUG_MODE:
                 print(f"[Council] Model list unchanged, using cached {len(self.available_models)} models")
@@ -1741,13 +1862,27 @@ class Pipe:
         if self.valves.DEBUG_MODE:
             print(f"[Council] Raw MODELS_TO_QUERY string (len={len(raw_string)}): {raw_string[:200]}...")
 
+        # Parse generation models
         models = [m.strip() for m in raw_string.split(",") if m.strip()]
 
         if self.valves.DEBUG_MODE:
-            print(f"[Council] Parsed {len(models)} models: {models}")
+            print(f"[Council] Parsed {len(models)} generation models: {models}")
 
         self.available_models = models
         self._last_models_string = raw_string
+
+        # Parse evaluation models (defaults to same as generation models if not specified)
+        if raw_eval_string and raw_eval_string.strip():
+            eval_models = [m.strip() for m in raw_eval_string.split(",") if m.strip()]
+            if self.valves.DEBUG_MODE:
+                print(f"[Council] Parsed {len(eval_models)} evaluation models: {eval_models}")
+        else:
+            eval_models = models  # Use same models for evaluation
+            if self.valves.DEBUG_MODE:
+                print(f"[Council] Using same {len(eval_models)} models for evaluation")
+
+        self.evaluation_models = eval_models
+
         return models
 
     def _get_model_params(self) -> Dict[str, ModelParameters]:
@@ -2499,13 +2634,10 @@ class Pipe:
         metadata: CouncilMetadata,
     ) -> List[Evaluation]:
         """
-        Distribute anonymous responses to all models for evaluation
+        Distribute anonymous responses to evaluation models for scoring
 
-        Each model evaluates ALL anonymous responses, including their own
-        (without knowing which is theirs). This strengthens peer review by:
-        - Adding more evaluation data points
-        - Preventing unconscious bias from skipping self-evaluation
-        - Testing whether models can objectively evaluate their own work
+        Each evaluation model evaluates ALL anonymous responses.
+        Uses self.evaluation_models which may differ from generation models.
 
         All evaluations run in parallel for maximum performance.
         """
@@ -2514,16 +2646,15 @@ class Pipe:
 
         # Build list of all evaluation tasks (all independent, can run in parallel)
         tasks = []
-        for evaluator in responses:
+        for evaluator_model_id in self.evaluation_models:
             for target in responses:
-                # Note: Models evaluate ALL responses including their own (anonymously)
                 if self.valves.DEBUG_MODE:
-                    print(f"[Council] Queuing: {evaluator.model_id} evaluating {target.anonymous_id}")
+                    print(f"[Council] Queuing: {evaluator_model_id} evaluating {target.anonymous_id}")
 
                 task = self._query_for_evaluation(
-                    evaluator_model_id=evaluator.model_id,
+                    evaluator_model_id=evaluator_model_id,
                     target_response=target,
-                    params=model_params[evaluator.model_id],
+                    params=model_params.get(evaluator_model_id, model_params[self.available_models[0]]),
                     request=request,
                     user=user,
                     metadata=metadata
