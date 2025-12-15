@@ -99,9 +99,9 @@ class ModelParameters(BaseModel):
     )
 
     max_tokens: int = Field(
-        default=2048,
-        ge=1,
-        description="Maximum tokens to generate"
+        default=0,
+        ge=0,
+        description="Maximum tokens to generate (0 = no limit)"
     )
 
     frequency_penalty: Optional[float] = Field(
@@ -1574,6 +1574,14 @@ class Pipe:
             if failed_responses:
                 yield f" ({len(failed_responses)} failed)"
             yield "\n\n"
+
+            # Show details of any failed models
+            if failed_responses:
+                yield "<details>\n<summary>⚠️ Failed Models</summary>\n\n"
+                for resp in failed_responses:
+                    error_msg = resp.error if resp.error else "Unknown error"
+                    yield f"- **{resp.model_id}**: {error_msg}\n"
+                yield "\n</details>\n\n"
 
         # Show individual responses if enabled
         if self.valves.SHOW_INDIVIDUAL_RESPONSES:

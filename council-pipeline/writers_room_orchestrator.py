@@ -807,6 +807,14 @@ class Pipe:
                 yield f" ({len(failed_responses)} failed)"
             yield "\n\n"
 
+            # Show details of any failed models
+            if failed_responses:
+                yield "<details>\n<summary>⚠️ Failed Models</summary>\n\n"
+                for resp in failed_responses:
+                    error_msg = resp.error if resp.error else "Unknown error"
+                    yield f"- **{resp.model_id}**: {error_msg}\n"
+                yield "\n</details>\n\n"
+
         # Show individual responses if enabled
         if self.valves.SHOW_INDIVIDUAL_RESPONSES:
             yield "## 📝 Individual Model Responses\n\n"

@@ -88,9 +88,9 @@ class ModelParameters(BaseModel):
     )
 
     max_tokens: int = Field(
-        default=2048,
-        ge=1,
-        description="Maximum tokens to generate"
+        default=0,
+        ge=0,
+        description="Maximum tokens to generate (0 = no limit)"
     )
 
     frequency_penalty: Optional[float] = Field(
