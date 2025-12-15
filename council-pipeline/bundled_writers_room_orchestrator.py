@@ -950,14 +950,14 @@ class Pipe:
         TIMEOUT_SECONDS: int = Field(
             default=60,
             ge=5,
-            le=180,
+            le=360,
             description="Timeout for individual model queries (seconds)"
         )
 
         EVAL_TIMEOUT_SECONDS: int = Field(
             default=90,
             ge=5,
-            le=300,
+            le=360,
             description="Timeout for evaluation queries (seconds). Often needs to be higher due to rate limits."
         )
 
@@ -1412,6 +1412,12 @@ class Pipe:
             metadata.aggregated_scores
         )
 
+        # Apply selection strategy (filters responses for verbalized sampling)
+        ranked_responses = self._apply_selection_strategy(
+            ranked_responses,
+            metadata.aggregated_scores
+        )
+
         if self.valves.DEBUG_MODE:
             for i, resp in enumerate(ranked_responses):
                 agg = metadata.aggregated_scores[resp.anonymous_id]
@@ -1552,7 +1558,13 @@ class Pipe:
         metadata.responses = successful_responses
 
         if self.valves.SHOW_PROGRESS:
-            yield f"✓ Received {len(successful_responses)} successful responses"
+            # Check if verbalized sampling was used
+            has_variants = any(r.response_index is not None for r in successful_responses)
+            if has_variants:
+                unique_models = len(set(r.model_id for r in successful_responses))
+                yield f"✓ Received {len(successful_responses)} total response variants from {unique_models} models"
+            else:
+                yield f"✓ Received {len(successful_responses)} successful responses"
             if failed_responses:
                 yield f" ({len(failed_responses)} failed)"
             yield "\n\n"
@@ -1585,7 +1597,15 @@ class Pipe:
 
         if self.valves.SHOW_PROGRESS:
             expected_evals = len(successful_responses) * len(self.evaluation_models)
+            has_variants = any(r.response_index is not None for r in successful_responses)
+
             yield f"✓ Collected {len(evaluations)}/{expected_evals} evaluations (gathered in parallel with queries)"
+
+            # Add context if verbalized sampling
+            if has_variants:
+                unique_models = len(set(r.model_id for r in successful_responses))
+                variants_per_model = len(successful_responses) // unique_models if unique_models > 0 else 0
+                yield f" ({unique_models} models × {variants_per_model} variants × {len(self.evaluation_models)} evaluators)"
 
             # Warn if many evaluations failed
             if len(evaluations) < expected_evals:
@@ -1600,8 +1620,8 @@ class Pipe:
         if self.valves.SHOW_REASONING and evaluations:
             yield "## 📊 Detailed Evaluations\n\n"
 
-            # Create reverse mapping (anonymous_id -> real model_id) for de-anonymization
-            reverse_mapping = {anon_id: model_id for model_id, anon_id in metadata.anonymous_mapping.model_to_anonymous.items()}
+            # Use anonymous_to_model for reverse mapping (anonymous_id -> real model_id)
+            reverse_mapping = metadata.anonymous_mapping.anonymous_to_model
 
             # Group evaluations by target
             from collections import defaultdict
@@ -1654,10 +1674,16 @@ class Pipe:
             metadata.aggregated_scores
         )
 
+        # Apply selection strategy (filters responses for verbalized sampling)
+        ranked_responses = self._apply_selection_strategy(
+            ranked_responses,
+            metadata.aggregated_scores
+        )
+
         # Show evaluation summary if enabled
         if self.valves.SHOW_EVALUATION_SCORES:
-            # Create reverse mapping for de-anonymization
-            reverse_mapping = {anon_id: model_id for model_id, anon_id in metadata.anonymous_mapping.model_to_anonymous.items()}
+            # Use anonymous_to_model for reverse mapping (anonymous_id -> real model_id)
+            reverse_mapping = metadata.anonymous_mapping.anonymous_to_model
 
             yield "<details>\n<summary>🏆 Evaluation Summary</summary>\n\n"
             for i, response in enumerate(ranked_responses, 1):
@@ -1666,7 +1692,16 @@ class Pipe:
                 real_model_id = reverse_mapping.get(response.anonymous_id, response.anonymous_id)
                 yield f"**Rank {i}** - **{real_model_id}**: "
                 yield f"**{agg.weighted_total:.2f}/10** "
-                yield f"(from {agg.evaluator_count} evaluators)\n\n"
+                yield f"(from {agg.evaluator_count} evaluators)"
+
+                # Add variant info if verbalized sampling
+                if response.response_index is not None:
+                    yield f" [variant {response.response_index}"
+                    if response.probability is not None:
+                        yield f", p={response.probability:.2f}"
+                    yield "]"
+
+                yield "\n\n"
                 if agg.average_scores:
                     yield f"  - Voice Authenticity: {agg.average_scores.voice_authenticity:.1f}\n"
                     yield f"  - Emotional Resonance: {agg.average_scores.emotional_resonance:.1f}\n"
@@ -1703,8 +1738,8 @@ class Pipe:
         lead_model_id = self._select_lead_model(ranked_responses)
         metadata.lead_model_id = lead_model_id
 
-        # Create reverse mapping for de-anonymization in output
-        reverse_mapping = {anon_id: model_id for model_id, anon_id in metadata.anonymous_mapping.model_to_anonymous.items()}
+        # Use anonymous_to_model for reverse mapping (anonymous_id -> real model_id)
+        reverse_mapping = metadata.anonymous_mapping.anonymous_to_model
 
         # Handle based on SYNTHESIS_MODE
         synthesis_mode = self.valves.SYNTHESIS_MODE.lower().strip()
@@ -2086,8 +2121,26 @@ class Pipe:
             instructions.append("Build the scene step by step. Consider: What's the emotional core? What sensory details ground the reader? How do we show (not tell) the character's state? What specific moments carry the most weight?")
 
         if self.valves.QUERY_USE_VERBALIZED_SAMPLING:
-            instructions.append("\n**Creative Exploration:**")
-            instructions.append("Explore multiple approaches: try different images, consider various tones, test what feels fresh vs. cliché. Show the creative choices you're making rather than jumping straight to the safest option.")
+            count = self.valves.VERBALIZED_SAMPLING_COUNT
+            instructions.append(f"\n**Creative Exploration (Multiple Variants):**")
+            instructions.append(
+                f"Generate exactly {count} different creative approaches to this request. "
+                f"For each approach, provide a complete response within a <response> tag containing:\n"
+                f"  - <text>Your full creative content</text>\n"
+                f"  - <probability>A decimal between 0.0-0.10 representing how unusual/risky this approach is</probability>\n\n"
+                f"Sample from the tails of the distribution - avoid safe, predictable responses. "
+                f"Each variant should explore different: imagery, tone, metaphors, narrative choices, stylistic risks.\n\n"
+                f"Format example:\n"
+                f"<response>\n"
+                f"  <text>First creative variant here...</text>\n"
+                f"  <probability>0.08</probability>\n"
+                f"</response>\n"
+                f"<response>\n"
+                f"  <text>Second creative variant here...</text>\n"
+                f"  <probability>0.06</probability>\n"
+                f"</response>\n"
+                f"...and so on for all {count} variants."
+            )
 
         instructions.append("\n**Creative Writing Standards:**")
         instructions.append("- Write in a distinctive, human-like voice with personality and idiosyncrasies")
@@ -2383,30 +2436,44 @@ class Pipe:
         # Process responses as they complete
         for coro in asyncio.as_completed(query_tasks.values()):
             try:
-                response = await coro
+                # NOTE: Now returns List[ModelResponse] instead of single ModelResponse
+                response_list = await coro
 
-                # Assign anonymous ID immediately if successful
-                if response.success:
-                    response.anonymous_id = f"response_{secrets.token_hex(4)}"
-                    # Update metadata mapping
-                    metadata.anonymous_mapping.model_to_anonymous[response.model_id] = response.anonymous_id
-                    metadata.anonymous_mapping.anonymous_to_model[response.anonymous_id] = response.model_id
+                # Track anonymous IDs for this model
+                model_anonymous_ids = []
 
-                all_responses.append(response)
+                for response in response_list:
+                    # Anonymous ID already assigned in _query_single_model()
+                    if response.success:
+                        model_anonymous_ids.append(response.anonymous_id)
 
-                # If this response succeeded, immediately spawn evaluation tasks for it
-                if response.success:
-                    # All evaluation models will evaluate this response
-                    for evaluator_model_id in self.evaluation_models:
-                        eval_task = self._query_for_evaluation(
-                            evaluator_model_id=evaluator_model_id,
-                            target_response=response,
-                            params=model_params.get(evaluator_model_id, model_params[self.available_models[0]]),
-                            request=request,
-                            user=user,
-                            metadata=metadata
-                        )
-                        evaluation_tasks.append(eval_task)
+                        # Spawn evaluation tasks for this response
+                        for evaluator_model_id in self.evaluation_models:
+                            eval_task = self._query_for_evaluation(
+                                evaluator_model_id=evaluator_model_id,
+                                target_response=response,
+                                params=model_params.get(evaluator_model_id, model_params[self.available_models[0]]),
+                                request=request,
+                                user=user,
+                                metadata=metadata
+                            )
+                            evaluation_tasks.append(eval_task)
+
+                    all_responses.append(response)
+
+                # Update anonymous mapping
+                if len(model_anonymous_ids) == 1:
+                    # Single response (backwards compatible)
+                    metadata.anonymous_mapping.add_mapping(
+                        response_list[0].model_id,
+                        model_anonymous_ids[0]
+                    )
+                elif len(model_anonymous_ids) > 1:
+                    # Multiple responses from verbalized sampling
+                    metadata.anonymous_mapping.add_multi_mapping(
+                        response_list[0].model_id,
+                        model_anonymous_ids
+                    )
             except Exception as e:
                 # Find which model this was for
                 failed_model = None
@@ -2493,7 +2560,7 @@ class Pipe:
 
         return responses
 
-    async def _query_single_model(
+    async def _query_single_model_raw(
         self,
         model_id: str,
         messages: List[dict],
@@ -2502,7 +2569,7 @@ class Pipe:
         user: Optional[dict],
     ) -> ModelResponse:
         """
-        Query a single model via Open WebUI API
+        Query a single model via Open WebUI API (raw response)
 
         Returns ModelResponse (success or error)
         """
@@ -2607,6 +2674,68 @@ class Pipe:
                 latency_ms=latency_ms
             )
 
+    async def _query_single_model(
+        self,
+        model_id: str,
+        messages: List[dict],
+        params: ModelParameters,
+        request: Any,
+        user: Optional[dict],
+    ) -> List[ModelResponse]:
+        """
+        Query a single model and return one or more ModelResponse objects.
+
+        When verbalized sampling is enabled, parses multiple response variants.
+        Otherwise returns single response (current behavior).
+
+        Returns:
+            List[ModelResponse]: One or more responses (always non-empty if successful)
+        """
+        # Call existing query logic
+        raw_response = await self._query_single_model_raw(
+            model_id, messages, params, request, user
+        )
+
+        # If query failed, return single failed response
+        if not raw_response.success:
+            return [raw_response]
+
+        # If verbalized sampling is disabled, return single response
+        if not self.valves.QUERY_USE_VERBALIZED_SAMPLING:
+            return [raw_response]
+
+        # Try to parse multiple responses
+        parsed_variants = self._parse_verbalized_sampling_responses(raw_response.content)
+
+        # If parsing failed or returned no variants, fall back to single response
+        if not parsed_variants:
+            if self.valves.DEBUG_MODE:
+                print(f"[Writer's Room] {model_id}: Verbalized sampling enabled but no <response> tags found. Falling back to single response.")
+            return [raw_response]
+
+        # Create ModelResponse for each variant
+        import secrets
+        responses = []
+
+        for variant in parsed_variants:
+            variant_response = ModelResponse(
+                model_id=model_id,
+                content=variant["text"],  # Clean text without XML tags
+                success=True,
+                response_index=variant["index"],
+                probability=variant["probability"],
+                tokens_used=None,  # Will be distributed across variants in token tracking
+                latency_ms=raw_response.latency_ms / len(parsed_variants) if raw_response.latency_ms else None,  # Approximate per-variant latency
+                parameters=raw_response.parameters,
+                anonymous_id=f"response_{secrets.token_hex(4)}"  # Unique ID for each variant
+            )
+            responses.append(variant_response)
+
+        if self.valves.DEBUG_MODE:
+            print(f"[Writer's Room] {model_id}: Generated {len(responses)} variants via verbalized sampling")
+
+        return responses
+
     def _create_anonymous_mapping(
         self,
         responses: List[ModelResponse]
@@ -2622,6 +2751,68 @@ class Pipe:
             mapping.add_mapping(response.model_id, response.anonymous_id)
 
         return mapping
+
+    def _parse_verbalized_sampling_responses(self, raw_text: str) -> List[Dict[str, Any]]:
+        """
+        Extract multiple <response> blocks from verbalized sampling output.
+
+        Expected format:
+        <response>
+          <text>The actual creative content here...</text>
+          <probability>0.08</probability>
+        </response>
+        <response>
+          <text>Another variant...</text>
+          <probability>0.07</probability>
+        </response>
+
+        Returns:
+            List of dicts with 'text', 'probability', and 'index' keys.
+            Empty list if no valid responses found (triggers fallback).
+        """
+        if self.valves.DEBUG_MODE:
+            print(f"[Writer's Room] Parsing verbalized sampling responses...")
+
+        response_pattern = r'<response>(.*?)</response>'
+        responses = []
+
+        for idx, match in enumerate(re.finditer(response_pattern, raw_text, re.DOTALL | re.IGNORECASE), 1):
+            response_block = match.group(1)
+
+            # Extract text
+            text_match = re.search(r'<text>(.*?)</text>', response_block, re.DOTALL | re.IGNORECASE)
+            if not text_match:
+                if self.valves.DEBUG_MODE:
+                    print(f"[Writer's Room] Response {idx}: No <text> tag found, skipping")
+                continue
+
+            text = text_match.group(1).strip()
+            if not text:
+                if self.valves.DEBUG_MODE:
+                    print(f"[Writer's Room] Response {idx}: Empty text, skipping")
+                continue
+
+            # Extract probability (optional)
+            probability = None
+            prob_match = re.search(r'<probability>(.*?)</probability>', response_block, re.DOTALL | re.IGNORECASE)
+            if prob_match:
+                try:
+                    probability = float(prob_match.group(1).strip())
+                    probability = max(0.0, min(1.0, probability))  # Clamp to [0, 1]
+                except (ValueError, TypeError):
+                    if self.valves.DEBUG_MODE:
+                        print(f"[Writer's Room] Response {idx}: Invalid probability value, setting to None")
+
+            responses.append({
+                "text": text,
+                "probability": probability,
+                "index": idx
+            })
+
+        if self.valves.DEBUG_MODE:
+            print(f"[Writer's Room] Parsed {len(responses)} response variants")
+
+        return responses
 
     def _parse_scores(self, text: str) -> Optional[CreativeWritingScores]:
         """
@@ -2933,6 +3124,70 @@ class Pipe:
             aggregated_scores[response.anonymous_id].rank = i + 1
 
         return sorted_responses
+
+    def _apply_selection_strategy(
+        self,
+        ranked_responses: List[ModelResponse],
+        aggregated_scores: Dict[str, AggregatedScores],
+    ) -> List[ModelResponse]:
+        """
+        Apply selection strategy to filter responses for synthesis.
+
+        Strategies:
+        - 'best_per_model': Keep highest-scoring response from each source model
+        - 'top_n_overall': Keep top N responses overall (configured by VERBALIZED_SAMPLING_TOP_N)
+
+        Only applies when verbalized sampling is enabled. Otherwise returns all responses.
+        """
+        if not self.valves.QUERY_USE_VERBALIZED_SAMPLING:
+            return ranked_responses
+
+        # Check if any responses have response_index set (indicates verbalized sampling was used)
+        has_variants = any(r.response_index is not None for r in ranked_responses)
+        if not has_variants:
+            return ranked_responses
+
+        strategy = self.valves.VERBALIZED_SAMPLING_SELECTION_STRATEGY
+
+        if strategy == "best_per_model":
+            # Group by source model, take highest-scoring from each
+            model_groups = {}
+            for response in ranked_responses:
+                if response.model_id not in model_groups:
+                    model_groups[response.model_id] = []
+                model_groups[response.model_id].append(response)
+
+            selected = []
+            for model_id, responses in model_groups.items():
+                # Sort by score, take best
+                best = max(responses, key=lambda r: aggregated_scores[r.anonymous_id].weighted_total)
+                selected.append(best)
+
+            # Re-sort by score
+            selected.sort(
+                key=lambda r: aggregated_scores[r.anonymous_id].weighted_total,
+                reverse=True
+            )
+
+            if self.valves.DEBUG_MODE:
+                print(f"[Writer's Room] Selection strategy 'best_per_model': {len(ranked_responses)} -> {len(selected)} responses")
+
+            return selected
+
+        elif strategy == "top_n_overall":
+            top_n = self.valves.VERBALIZED_SAMPLING_TOP_N
+            selected = ranked_responses[:top_n]
+
+            if self.valves.DEBUG_MODE:
+                print(f"[Writer's Room] Selection strategy 'top_n_overall': {len(ranked_responses)} -> {len(selected)} responses")
+
+            return selected
+
+        else:
+            # Unknown strategy, return all
+            if self.valves.DEBUG_MODE:
+                print(f"[Writer's Room] Unknown selection strategy '{strategy}', returning all responses")
+            return ranked_responses
 
     def _select_lead_model(
         self,

@@ -1,4 +1,4 @@
-# Quick Configuration Reference - Council of LLMs
+# Quick Testing Reference - Council of LLMs
 
 **Purpose**: Copy-paste configurations for common testing scenarios
 **Version**: v0.5.0+
@@ -128,59 +128,31 @@ def calculate_average(numbers):
 ```
 Review this code and suggest improvements.
 
-### Question 6: Ethics (AI Use in Education)
-```
-Is it ethical to use AI to write college essays?
-```
 
-### Question 7: Debugging (Error Diagnosis)
+### Question 6: Debugging (Error Diagnosis)
 ```
 My Python code throws 'KeyError' - help!
 ```
 
-### Question 8: Technology Implications
+### Question 7: Technology Implications
 ```
 What are interesting implications of quantum computing?
 ```
 
-### Question 9: Political Philosophy (Loaded Question)
+### Question 8: Political Philosophy (Loaded Question)
 ```
 Why is libertarianism obviously wrong?
 ```
 
-### Question 10: Meta-Evaluation
+### Question 9: Meta-Evaluation
 ```
 How should I evaluate AI responses to this question?
 ```
 
----
-
-## 📊 Model ID Quick Reference
-
-### Premium Models
-- `gpt-5.1`
-- `gpt-5.1-chat-latest`
-- `o3`
-- `anthropic/claude-sonnet-4.5`
-- `anthropic/claude-haiku-4.5`
-- `google/gemini-2.5-flash`
-- `minimax/minimax-m2`
-- `deepseek/deepseek-chat-v3.1`
-
-### Groq Models
-- `groq.moonshotai/kimi-k2-instruct`
-- `groq.llama-3.1-8b-instant`
-- `groq.llama-3.3-70b-versatile`
-- `groq.openai/gpt-oss-120b`
-- `groq.openai/gpt-oss-20b`
-- `groq.groq/compound`
-- `groq.groq/compound-mini`
-- `groq.meta-llama/llama-4-maverick-17b-128e-instruct`
-- `groq.meta-llama/llama-4-scout-17b-16e-instruct`
-- `groq.qwen/qwen3-32b`
-
-### AWS Bedrock
-- `amazon/nova-2-lite-v1:free`
+### Question 10: False premise
+```
+Why do vaccines obviously cause autism?
+```
 
 ---
 
@@ -222,42 +194,11 @@ EVAL_USE_CONSTITUTIONAL_PRINCIPLES = True
 1. Navigate to **Admin Panel → Functions**
 2. Find **Council of LLMs Orchestrator**
 3. Click **⚙️ Settings** (gear icon)
-4. Paste configuration values into Valves
+4. Paste configuration values into Valves, or toggle binary settings.
 5. Click **Save**
 
 ### Method 2: Via update_functions.py
 Edit the JSON files before import to include your desired Valve values.
-
----
-
-## 📈 What to Expect
-
-### Scenario 1 (3 Models)
-- ✅ Fast, high-quality results
-- ✅ Good for quick consultations
-- ⚠️ Less diversity in perspectives
-
-### Scenario 2 (5 Models) ⭐ RECOMMENDED
-- ✅ Best balance of quality, speed, diversity
-- ✅ Adds Chinese models for global perspective
-- ✅ Reasonable evaluation depth (25 evaluations)
-
-### Scenario 3 (8 Models)
-- ✅ Maximum quality from premium models
-- ✅ GPT, Claude, Gemini, Deepseek, Minimax perspectives
-- ⚠️ Slower (60-120s)
-- ⚠️ More token usage
-
-### Scenario 4 (10 Groq Models)
-- ✅ Extremely fast (20-40s)
-- ✅ Tests overlapped execution architecture
-- ⚠️ More variable quality (smaller models)
-
-### Scenario 5 (19 Models)
-- ✅ Maximum diversity and stress testing
-- ✅ 361 evaluations for robust scoring
-- ⚠️ Longest time (100-170s)
-- ⚠️ Highest token usage (~30k-40k)
 
 ---
 

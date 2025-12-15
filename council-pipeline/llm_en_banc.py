@@ -57,6 +57,8 @@ class Pipe:
 
         TIMEOUT_SECONDS: int = Field(
             default=60,
+            ge=5,
+            le=360,
             description="Timeout for each evaluation (seconds)"
         )
 

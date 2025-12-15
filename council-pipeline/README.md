@@ -4,8 +4,8 @@
 
 > **User documentation** (installation, configuration, usage) is in the [main README](../README.md).
 
-**Version**: 0.6.0
-**Status**: Fully Functional
+**Version**: 0.6.1
+**Status**: Production Ready
 
 ## Files
 
@@ -49,32 +49,65 @@ These filters were part of the original architecture but are now optional - the 
 
 ## Development Workflow
 
+### Quick Iteration Cycle (Recommended)
+
+The fastest way to develop and test changes:
+
+```bash
+# 1. Edit source files
+vim writers_room_orchestrator.py
+
+# 2. Regenerate JSON exports
+python create_bundled_exports.py
+
+# 3. Deploy to Open WebUI (preserves Valve configs!)
+python update_functions.py
+```
+
+The `update_functions.py` script is the **recommended way** to deploy changes because it:
+- Automatically updates existing functions (no manual deletion needed)
+- Preserves your Valve configurations
+- Creates new functions if they don't exist
+- Handles all JSON files in one command
+
 ### Building JSON Exports
 
-If you modify the source files:
+After modifying any source `.py` file:
 
 ```bash
 python create_bundled_exports.py
 ```
 
-This creates bundled versions with inlined schemas and generates JSON exports ready for Open WebUI import.
+This script:
+- Reads schemas from `schemas.py`
+- Creates bundled versions with inlined schemas
+- Generates JSON exports for Open WebUI import
+- Creates both individual function JSONs and `council_llms_complete.json`
 
-### Testing Changes
+### Manual Testing (Alternative)
+
+If you prefer manual import:
 
 1. Edit `council_orchestrator.py` or other source files
 2. Run `python create_bundled_exports.py` to regenerate JSON exports
-3. Import the new `council_orchestrator.json` into Open WebUI (Admin Panel > Functions)
-4. Test in Open WebUI
+3. Go to Open WebUI Admin Panel → Functions
+4. Delete the old function (if updating)
+5. Import the new `council_orchestrator.json`
+6. Reconfigure Valves (they reset on manual import)
+7. Test in Open WebUI
+
+**Note**: Manual import requires reconfiguring Valves. Use `update_functions.py` to preserve settings.
 
 ### Development Scripts
 
 | Script | Purpose |
 |--------|---------|
-| `update_functions.py` | Auto-update functions in Open WebUI via API |
-| `check_valve_config.py` | Check current valve values in database |
-| `reset_models_valve.py` | Reset MODELS_TO_QUERY to default |
+| `update_functions.py` | **Deploy/update functions in Open WebUI via API** (preserves Valves) |
+| `create_bundled_exports.py` | Generate JSON exports from source files |
+| `check_valve_config.py` | View current Valve values for all functions |
+| `reset_models_valve.py` | Reset MODELS_TO_QUERY to default value |
 
-**Credential Configuration** for development scripts: See [`.env.example`](../.env.example) in the root directory for flexible credential management (direct env vars, 1Password, AWS Secrets Manager, etc.).
+**Credential Configuration**: See [`.env.example`](../.env.example) for flexible credential management (direct env vars, 1Password, AWS Secrets Manager, etc.).
 
 ## Additional Documentation
 

@@ -162,14 +162,14 @@ class Pipe:
         TIMEOUT_SECONDS: int = Field(
             default=60,
             ge=5,
-            le=180,
+            le=360,
             description="Timeout for individual model queries (seconds)"
         )
 
         EVAL_TIMEOUT_SECONDS: int = Field(
             default=90,
             ge=5,
-            le=300,
+            le=360,
             description="Timeout for evaluation queries (seconds). Often needs to be higher due to rate limits."
         )
 
@@ -770,8 +770,8 @@ class Pipe:
         if self.valves.SHOW_REASONING and evaluations:
             yield "## 📊 Detailed Evaluations\n\n"
 
-            # Create reverse mapping (anonymous_id -> real model_id) for de-anonymization
-            reverse_mapping = {anon_id: model_id for model_id, anon_id in metadata.anonymous_mapping.model_to_anonymous.items()}
+            # Use anonymous_to_model for reverse mapping (anonymous_id -> real model_id)
+            reverse_mapping = metadata.anonymous_mapping.anonymous_to_model
 
             # Group evaluations by target
             from collections import defaultdict
@@ -814,8 +814,8 @@ class Pipe:
 
         # Show evaluation summary if enabled
         if self.valves.SHOW_EVALUATION_SCORES:
-            # Create reverse mapping for de-anonymization
-            reverse_mapping = {anon_id: model_id for model_id, anon_id in metadata.anonymous_mapping.model_to_anonymous.items()}
+            # Use anonymous_to_model for reverse mapping (anonymous_id -> real model_id)
+            reverse_mapping = metadata.anonymous_mapping.anonymous_to_model
 
             yield "<details>\n<summary>🏆 Evaluation Summary</summary>\n\n"
             for i, response in enumerate(ranked_responses, 1):
@@ -859,8 +859,8 @@ class Pipe:
         lead_model_id = self._select_lead_model(ranked_responses)
         metadata.lead_model_id = lead_model_id
 
-        # Create reverse mapping for de-anonymization in output
-        reverse_mapping = {anon_id: model_id for model_id, anon_id in metadata.anonymous_mapping.model_to_anonymous.items()}
+        # Use anonymous_to_model for reverse mapping (anonymous_id -> real model_id)
+        reverse_mapping = metadata.anonymous_mapping.anonymous_to_model
 
         # Handle based on SYNTHESIS_MODE
         synthesis_mode = self.valves.SYNTHESIS_MODE.lower().strip()

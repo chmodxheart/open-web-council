@@ -177,6 +177,19 @@ class ModelResponse(BaseModel):
         description="Parameters used for this query"
     )
 
+    # Verbalized Sampling Support
+    response_index: Optional[int] = Field(
+        default=None,
+        description="Response variant index (1-N) for verbalized sampling. None for single responses."
+    )
+
+    probability: Optional[float] = Field(
+        default=None,
+        ge=0.0,
+        le=1.0,
+        description="Probability score from verbalized sampling (0.0-1.0). None for single responses."
+    )
+
     class Config:
         json_schema_extra = {
             "example": {
@@ -200,28 +213,37 @@ class AnonymousResponseMapping(BaseModel):
 
     Used to track which model produced which response while
     maintaining anonymity during evaluation
+
+    Supports both single responses (model -> anonymous_id) and multiple
+    responses per model (model -> list of anonymous_ids) for verbalized sampling
     """
-    model_to_anonymous: Dict[str, str] = Field(
+    model_to_anonymous: Dict[str, Union[str, List[str]]] = Field(
         default_factory=dict,
-        description="Map: model_id -> anonymous_id"
+        description="Map: model_id -> anonymous_id (single) or List[anonymous_id] (multiple for verbalized sampling)"
     )
 
     anonymous_to_model: Dict[str, str] = Field(
         default_factory=dict,
-        description="Map: anonymous_id -> model_id"
+        description="Map: anonymous_id -> model_id (always 1:1)"
     )
 
     def add_mapping(self, model_id: str, anonymous_id: str) -> None:
-        """Add a bidirectional mapping"""
+        """Add a bidirectional mapping for a single response"""
         self.model_to_anonymous[model_id] = anonymous_id
         self.anonymous_to_model[anonymous_id] = model_id
+
+    def add_multi_mapping(self, model_id: str, anonymous_ids: List[str]) -> None:
+        """Add mapping for multiple responses from same model (verbalized sampling)"""
+        self.model_to_anonymous[model_id] = anonymous_ids
+        for anon_id in anonymous_ids:
+            self.anonymous_to_model[anon_id] = model_id
 
     def get_model_id(self, anonymous_id: str) -> Optional[str]:
         """Get model ID from anonymous ID"""
         return self.anonymous_to_model.get(anonymous_id)
 
-    def get_anonymous_id(self, model_id: str) -> Optional[str]:
-        """Get anonymous ID from model ID"""
+    def get_anonymous_id(self, model_id: str) -> Optional[Union[str, List[str]]]:
+        """Get anonymous ID(s) from model ID. Returns single string or list depending on mapping."""
         return self.model_to_anonymous.get(model_id)
 
     def reveal(self, anonymous_id: str) -> Optional[str]:
@@ -903,14 +925,14 @@ class Pipe:
         TIMEOUT_SECONDS: int = Field(
             default=60,
             ge=5,
-            le=180,
+            le=360,
             description="Timeout for individual model queries (seconds)"
         )
 
         EVAL_TIMEOUT_SECONDS: int = Field(
             default=90,
             ge=5,
-            le=300,
+            le=360,
             description="Timeout for evaluation queries (seconds). Often needs to be higher due to rate limits."
         )
 
@@ -1511,8 +1533,8 @@ class Pipe:
         if self.valves.SHOW_REASONING and evaluations:
             yield "## 📊 Detailed Evaluations\n\n"
 
-            # Create reverse mapping (anonymous_id -> real model_id) for de-anonymization
-            reverse_mapping = {anon_id: model_id for model_id, anon_id in metadata.anonymous_mapping.model_to_anonymous.items()}
+            # Use anonymous_to_model for reverse mapping (anonymous_id -> real model_id)
+            reverse_mapping = metadata.anonymous_mapping.anonymous_to_model
 
             # Group evaluations by target
             from collections import defaultdict
@@ -1555,8 +1577,8 @@ class Pipe:
 
         # Show evaluation summary if enabled
         if self.valves.SHOW_EVALUATION_SCORES:
-            # Create reverse mapping for de-anonymization
-            reverse_mapping = {anon_id: model_id for model_id, anon_id in metadata.anonymous_mapping.model_to_anonymous.items()}
+            # Use anonymous_to_model for reverse mapping (anonymous_id -> real model_id)
+            reverse_mapping = metadata.anonymous_mapping.anonymous_to_model
 
             yield "<details>\n<summary>🏆 Evaluation Summary</summary>\n\n"
             for i, response in enumerate(ranked_responses, 1):
@@ -1600,8 +1622,8 @@ class Pipe:
         lead_model_id = self._select_lead_model(ranked_responses)
         metadata.lead_model_id = lead_model_id
 
-        # Create reverse mapping for de-anonymization in output
-        reverse_mapping = {anon_id: model_id for model_id, anon_id in metadata.anonymous_mapping.model_to_anonymous.items()}
+        # Use anonymous_to_model for reverse mapping (anonymous_id -> real model_id)
+        reverse_mapping = metadata.anonymous_mapping.anonymous_to_model
 
         # Handle based on SYNTHESIS_MODE
         synthesis_mode = self.valves.SYNTHESIS_MODE.lower().strip()
