@@ -46,24 +46,36 @@ User receives synthesized result with optional transparency
 
 ## Current Status
 
-**Version**: 0.6.0 (Synthesis Mode & Cost Tracking Release)
-**Status**: Fully Functional - Ready for Use
-**Last Updated**: 2025-12-06
+**Version**: 0.6.1 (Stability & Performance Update)
+**Status**: Fully Functional - Production Ready
+**Last Updated**: 2025-12-15
 
 ### What's Working
 
-- Multi-model query distribution (parallel)
-- Response anonymization with blind peer review
-- Real model-based evaluations with detailed reasoning
-- Score parsing and aggregation
-- Real LLM-powered synthesis
-- Streaming output support
-- Configurable prompting techniques
-- De-anonymized user output (transparent after evaluation)
-- Detailed error messages
-- **NEW**: Synthesis mode toggle (full/highest_rated/none)
-- **NEW**: Token usage tracking per model and phase
-- **NEW**: Cost estimation with per-model pricing
+**Core Features**:
+- ✅ Multi-model query distribution (parallel)
+- ✅ Response anonymization with blind peer review
+- ✅ Real model-based evaluations with detailed reasoning
+- ✅ Score parsing and aggregation
+- ✅ Real LLM-powered synthesis
+- ✅ Streaming output support with progress indicators
+- ✅ Configurable prompting techniques
+- ✅ De-anonymized user output (transparent after evaluation)
+- ✅ Detailed error messages
+
+**Recent Improvements** (v0.6.1):
+- ✅ **Separate evaluation models**: Configure different models for queries vs. evaluations
+- ✅ **Extended timeouts**: Query and evaluation timeouts now support up to 360 seconds (6 minutes)
+- ✅ **Fixed reverse mapping bug**: Resolved issue causing empty content in Individual Model Responses
+- ✅ **Accurate evaluation counts**: Fixed evaluation progress display when using separate evaluator models
+- ✅ **Anti-slop patterns**: Added warnings against rhetorical negations ("Not X, but Y") in creative writing
+- ✅ **Verbalized sampling support**: Infrastructure for multiple response variants (experimental)
+
+**Features from v0.6.0**:
+- ✅ Synthesis mode toggle (full/highest_rated/none)
+- ✅ Token usage tracking per model and phase
+- ✅ Cost estimation with per-model pricing
+- ✅ Configurable synthesis filtering (top-N, min-score threshold)
 
 ### LLM Writer's Room
 
@@ -109,28 +121,82 @@ Have multiple models evaluate and score a response. Great for:
 
 ### Installation
 
+You can install using either the **automated script** (recommended) or **manual import**.
+
+#### Option A: Automated Installation (Recommended)
+
+Use the `update_functions.py` script to automatically install and update all tools:
+
+```bash
+cd council-pipeline/
+
+# Set your Open WebUI credentials
+export OPENWEBUI_URL="https://your-openwebui-instance.com"
+export OPENWEBUI_API_KEY="sk-your-api-key"
+
+# Install/update all functions
+python update_functions.py
+```
+
+The script will:
+- Automatically create/update all Council functions in Open WebUI
+- Preserve your existing Valve configurations
+- Show which functions were created vs. updated
+- Handle errors gracefully with clear messages
+
+**Credential Options**: See [`.env.example`](.env.example) for flexible credential management (direct env vars, 1Password CLI, AWS Secrets Manager, etc.)
+
+#### Option B: Manual Import
+
 Choose which tools you want to install:
 
-#### Council of LLMs (Full Pipeline)
+**Council of LLMs (Full Pipeline)**:
+1. Download `council_orchestrator.json` from `council-pipeline/`
+2. Go to Admin Panel → Functions → Import Function
+3. Upload the JSON file
+4. Configure `MODELS_TO_QUERY` in Valves
+5. Select "Council of LLMs" from model dropdown
 
-1. **Download** `council_orchestrator.json` from `council-pipeline/`
-2. **Import**: Admin Panel -> Functions -> Import Function
-3. **Configure**: Set `MODELS_TO_QUERY` in Valves (e.g., `gpt-5.1,o3,anthropic/claude-sonnet-4.5`)
-4. **Use**: Select "Council of LLMs" from model dropdown
+**Writer's Room (Creative Writing)**:
+1. Download `writers_room_orchestrator.json` from `council-pipeline/`
+2. Import via Admin Panel → Functions
+3. Configure valves for creative writing preferences
+4. Select "LLM Writer's Room" from model dropdown
 
-#### LLM Roundtable
+**LLM Roundtable (Parallel Query)**:
+1. Download `llm_roundtable.json` from `council-pipeline/`
+2. Import via Admin Panel → Functions
+3. Configure `MODELS_TO_QUERY` valve
+4. Use for parallel model comparison
 
-1. **Download** `llm_roundtable.json` from `council-pipeline/`
-2. **Import**: Admin Panel -> Functions -> Import Function
-3. **Configure**: Set `MODELS_TO_QUERY` in Valves
-4. **Use**: Select "LLM Roundtable" from model dropdown, ask any question
+**LLM En Banc (Response Evaluation)**:
+1. Download `llm_en_banc.json` from `council-pipeline/`
+2. Import via Admin Panel → Functions
+3. Configure evaluator models
+4. Paste responses to evaluate
 
-#### LLM En Banc
+**Complete Suite**:
+- Download `council_llms_complete.json` to install all tools at once
 
-1. **Download** `llm_en_banc.json` from `council-pipeline/`
-2. **Import**: Admin Panel -> Functions -> Import Function
-3. **Configure**: Set `MODELS_TO_QUERY` in Valves
-4. **Use**: Select "LLM En Banc" from model dropdown, paste response to evaluate
+### Updating Existing Installations
+
+To update to the latest version:
+
+**Using update_functions.py** (Recommended):
+```bash
+cd council-pipeline/
+python update_functions.py
+```
+
+This automatically updates all functions while preserving your Valve configurations.
+
+**Manual Update**:
+1. Download the latest JSON files from `council-pipeline/`
+2. In Open WebUI: Admin Panel → Functions → [Function Name] → Delete
+3. Import the new JSON file
+4. Reconfigure your Valves (they will be reset)
+
+**Note**: The automated script preserves your settings; manual import requires reconfiguration.
 
 ### Default Configuration
 
@@ -159,36 +225,67 @@ Change this to match model IDs available in your Open WebUI instance.
 - **De-Anonymized Output**: See which model gave which response after evaluation
 - **Better Error Messages**: Know exactly which models succeeded/failed and why
 
-### Configuration Options (28 Valves)
+### Configuration Options
+
+All tools are configured through **Valves** in the Open WebUI Admin Panel (Settings → Functions → [Function Name] → Valves).
+
+#### Council of LLMs & Writer's Room Valves
 
 **Model Configuration**:
-- `MODELS_TO_QUERY`: Comma-separated model list
-- `LEAD_SYNTHESIZER`: Auto (highest-scoring) or designated model
-- `MIN_MODELS_REQUIRED`: Minimum threshold (default: 2)
+- `MODELS_TO_QUERY`: Comma-separated model IDs (default: `gpt-5.1,o3,anthropic/claude-sonnet-4.5`)
+- `EVALUATION_MODELS`: Models for evaluation (empty = use same as query models)
+- `LEAD_SYNTHESIZER`: Synthesis model (`auto` for highest-scoring, or specific model ID)
+- `MIN_MODELS_REQUIRED`: Minimum successful responses needed (default: 3)
 
-**Evaluation Weights** (must sum to 1.0):
-- `EVALUATION_WEIGHT_ACCURACY`: 0.3
+**Evaluation Criteria Weights** (must sum to 1.0):
+
+*Council (Technical Questions)*:
+- `EVALUATION_WEIGHT_ACCURACY`: 0.30
 - `EVALUATION_WEIGHT_CLARITY`: 0.25
 - `EVALUATION_WEIGHT_COMPLETENESS`: 0.25
-- `EVALUATION_WEIGHT_RELEVANCE`: 0.2
+- `EVALUATION_WEIGHT_RELEVANCE`: 0.20
 
-**Prompting Techniques** (all toggleable):
-- Hermeneutic Circle (parts/whole interplay)
-- Chain of Thought (step-by-step reasoning)
-- Verbalized Sampling (show thinking process)
-- Socratic Questioning (probe assumptions)
-- Adversarial Stance (red team analysis)
-- Constitutional Principles (principle-based justification)
-- Meta-Cognitive Reflection (uncertainty awareness)
+*Writer's Room (Creative Writing)*:
+- `EVALUATION_WEIGHT_VOICE_AUTHENTICITY`: 0.25
+- `EVALUATION_WEIGHT_EMOTIONAL_RESONANCE`: 0.20
+- `EVALUATION_WEIGHT_ORIGINALITY`: 0.20
+- `EVALUATION_WEIGHT_STYLE_CONSISTENCY`: 0.15
+- `EVALUATION_WEIGHT_NARRATIVE_COHERENCE`: 0.15
+- `EVALUATION_WEIGHT_LLM_ARTIFACT_AVOIDANCE`: 0.05
 
-**Performance**:
-- `TIMEOUT_SECONDS`: Per-model timeout (default: 60)
+**Prompting Techniques** (toggleable for query/evaluation/synthesis):
+- `QUERY_USE_HERMENEUTIC_CIRCLE`: Consider parts and whole together
+- `QUERY_USE_CHAIN_OF_THOUGHT`: Step-by-step reasoning
+- `QUERY_USE_VERBALIZED_SAMPLING`: Multiple response variants with probabilities
+- `EVAL_USE_SOCRATIC_QUESTIONING`: Probe assumptions and implications
+- `EVAL_USE_ADVERSARIAL_STANCE`: Critical red-team analysis
+- `SYNTHESIS_USE_CONSTITUTIONAL_PRINCIPLES`: Principle-based synthesis
+- `SYNTHESIS_USE_META_COGNITIVE_REFLECTION`: Acknowledge uncertainty
+
+**Synthesis Configuration**:
+- `SYNTHESIS_MODE`: `full` (synthesize from all), `highest_rated` (return best only), `none` (skip synthesis)
+- `TOP_N_FOR_SYNTHESIS`: How many top responses to include (0 = all)
+- `MIN_SCORE_FOR_SYNTHESIS`: Minimum score threshold (0-10, 0 = no filter)
+
+**Performance & Timeouts**:
+- `TIMEOUT_SECONDS`: Query timeout per model (5-360 seconds, default: 60)
+- `EVAL_TIMEOUT_SECONDS`: Evaluation timeout (5-360 seconds, default: 90)
+- `ENABLE_PARALLEL_REQUESTS`: Parallel queries (recommended: true)
 - `DEBUG_MODE`: Enable detailed logging
 
-**Output**:
-- `SHOW_INDIVIDUAL_RESPONSES`: Show all model responses
-- `SHOW_EVALUATION_SCORES`: Show score breakdown
-- `SHOW_DETAILED_EVALUATIONS`: Show full evaluation reasoning
+**Output Display**:
+- `SHOW_INDIVIDUAL_RESPONSES`: Display all model responses
+- `SHOW_EVALUATION_SCORES`: Show score breakdown and rankings
+- `SHOW_REASONING`: Show detailed evaluation reasoning
+- `SHOW_PROGRESS`: Show progress indicators during processing
+- `SHOW_TOKEN_USAGE`: Display token counts per model and phase
+- `SHOW_COST_ESTIMATE`: Show estimated API costs
+
+**Model-Specific Parameters** (advanced):
+- `MODEL_PARAMS_JSON`: Per-model temperature/top_p/max_tokens as JSON
+- `DEFAULT_TEMPERATURE`: Default temperature (0.0-2.0, default: 0.7)
+- `DEFAULT_TOP_P`: Default nucleus sampling (0.0-1.0, default: 1.0)
+- `DEFAULT_MAX_TOKENS`: Default max tokens (default: 2048)
 
 ## Project Structure
 
@@ -295,19 +392,41 @@ Council uses more tokens than single-model queries due to multiple phases:
 ## Troubleshooting
 
 **"Council requires at least X models"**
-- Set `MODELS_TO_QUERY` in Orchestrator Valves with valid model IDs
+- Set `MODELS_TO_QUERY` in Orchestrator Valves with valid model IDs from your Open WebUI instance
+- Check that model IDs match exactly (case-sensitive)
+- Verify models are active and responding in Open WebUI
 
 **Models timing out**
-- Increase `TIMEOUT_SECONDS` (default: 60)
-- Check that models are responding in Open WebUI directly
+- Increase `TIMEOUT_SECONDS` (default: 60, max: 360 seconds)
+- Increase `EVAL_TIMEOUT_SECONDS` for evaluation phase (default: 90, max: 360 seconds)
+- Check that models are responding normally in Open WebUI directly
+- Some models (like O3) may need longer timeouts for complex reasoning
+
+**Empty content in Individual Model Responses**
+- Update to v0.6.1 or later (this was a bug in the reverse mapping code)
+- Re-import the latest `writers_room_orchestrator.json` or `council_orchestrator.json`
+- Or run `python update_functions.py` to auto-update
 
 **Evaluation scores not parsing**
 - Enable `DEBUG_MODE` to see raw evaluation responses
-- Adjust score parsing regex patterns in Valves if needed
+- Check that evaluation models are returning structured scores
+- Some models may need prompting adjustments for consistent score formatting
+
+**Wrong evaluation count displayed**
+- Update to v0.6.1 or later (fixed evaluation count calculation)
+- This was especially noticeable when using separate `EVALUATION_MODELS`
 
 **Import fails**
-- Ensure you're importing the JSON file, not the Python file
-- Check Open WebUI version supports Functions/Pipelines
+- Ensure you're importing the `.json` file, not the `.py` file
+- Check Open WebUI version supports Functions/Pipelines (v0.1.0+)
+- Try importing individual files instead of `council_llms_complete.json`
+
+**High token usage / API costs**
+- Reduce the number of models in `MODELS_TO_QUERY`
+- Use `SYNTHESIS_MODE: "highest_rated"` to skip synthesis
+- Set `TOP_N_FOR_SYNTHESIS` to limit responses included in synthesis
+- Use `MIN_SCORE_FOR_SYNTHESIS` to filter low-quality responses
+- Disable verbose prompting techniques in Valves
 
 ## Contributing
 
@@ -318,36 +437,60 @@ Contributions welcome! This is an open-source project under the Open WebUI ecosy
 ```bash
 # Clone this repository
 git clone https://github.com/chmodxheart/open-web-council.git
-cd open-web-council
+cd open-web-council/council-pipeline
 
 # Review the codebase
-ls council-pipeline/
+ls -la
 
-# Make changes to council_orchestrator.py
-# Test by importing into Open WebUI
+# Make changes to source files
+vim council_orchestrator.py
+
+# Regenerate JSON exports
+python create_bundled_exports.py
+
+# Deploy to Open WebUI
+python update_functions.py
 ```
 
-### Development Scripts Credentials
+### Development Utilities
 
-The `council-pipeline/` directory includes utility scripts for managing functions via the Open WebUI API:
-- `update_functions.py` - Auto-update functions in Open WebUI
-- `check_valve_config.py` - Check current valve configuration
-- `reset_models_valve.py` - Reset MODELS_TO_QUERY valve
+The `council-pipeline/` directory includes several utility scripts:
 
-**Credential Configuration**: These scripts support flexible credential management. See [`.env.example`](.env.example) for configuration options:
-- Direct environment variables
-- Command-based retrieval (1Password, AWS Secrets Manager, HashiCorp Vault, etc.)
-- Default values (development only)
+**Deployment & Updates**:
+- `update_functions.py` - Auto-deploy/update all functions in Open WebUI via API
+  - Creates new functions or updates existing ones
+  - Preserves Valve configurations on updates
+  - Handles all JSON files in the directory
 
-Example:
+**Build Tools**:
+- `create_bundled_exports.py` - Generate all JSON exports from source files
+  - Inlines schemas into bundled versions
+  - Creates both individual and complete suite JSON files
+  - Run this after modifying any `.py` source files
+
+**Configuration Management**:
+- `check_valve_config.py` - View current Valve values for all functions
+- `reset_models_valve.py` - Reset MODELS_TO_QUERY to default value
+
+**Credential Configuration**:
+
+All scripts support flexible credential management via environment variables or command-based retrieval. See [`.env.example`](.env.example) for full configuration options.
+
+**Quick Setup** (Direct Credentials):
 ```bash
 export OPENWEBUI_URL="https://your-openwebui-instance.com"
 export OPENWEBUI_API_KEY="sk-your-api-key"
-
-# OR using 1Password CLI
-export OPENWEBUI_URL_COMMAND='op item get "OpenWebUI API Key" --fields label=url --reveal'
-export OPENWEBUI_API_KEY_COMMAND='op item get "OpenWebUI API Key" --fields label=password --reveal'
+python update_functions.py
 ```
+
+**Advanced Setup** (1Password CLI):
+```bash
+export OPENWEBUI_URL_COMMAND='op item get "OpenWebUI" --fields url --reveal'
+export OPENWEBUI_API_KEY_COMMAND='op item get "OpenWebUI" --fields api_key --reveal'
+python update_functions.py
+```
+
+Supports: 1Password, AWS Secrets Manager, HashiCorp Vault, or any CLI tool that outputs credentials.
 
 ### Current Focus
 
