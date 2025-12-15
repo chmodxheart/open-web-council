@@ -190,6 +190,12 @@ class ModelResponse(BaseModel):
         description="Probability score from verbalized sampling (0.0-1.0). None for single responses."
     )
 
+    # Additional metadata (e.g., finish_reason, input/output token breakdown)
+    metadata: Optional[Dict[str, Any]] = Field(
+        default=None,
+        description="Additional metadata about the response (finish_reason, token breakdown, etc.)"
+    )
+
     class Config:
         json_schema_extra = {
             "example": {
@@ -870,9 +876,9 @@ class Pipe:
         )
 
         DEFAULT_MAX_TOKENS: int = Field(
-            default=2048,
-            ge=1,
-            description="Default max tokens to generate"
+            default=0,
+            ge=0,
+            description="Default max tokens to generate (0 = no limit)"
         )
 
         # ============================================================
@@ -2369,8 +2375,11 @@ class Pipe:
                 "stream": False,
                 "temperature": params.temperature,
                 "top_p": params.top_p,
-                "max_tokens": params.max_tokens,
             }
+
+            # Only set max_tokens if > 0 (0 means no limit)
+            if params.max_tokens > 0:
+                payload["max_tokens"] = params.max_tokens
 
             if params.frequency_penalty is not None:
                 payload["frequency_penalty"] = params.frequency_penalty
@@ -2586,8 +2595,11 @@ class Pipe:
                 "stream": False,
                 "temperature": params.temperature,
                 "top_p": params.top_p,
-                "max_tokens": params.max_tokens,
             }
+
+            # Only set max_tokens if > 0 (0 means no limit)
+            if params.max_tokens > 0:
+                payload["max_tokens"] = params.max_tokens
 
             # Make API call
             async with aiohttp.ClientSession() as session:
@@ -2835,8 +2847,11 @@ class Pipe:
                 "stream": False,
                 "temperature": params.temperature,
                 "top_p": params.top_p,
-                "max_tokens": params.max_tokens,
             }
+
+            # Only set max_tokens if > 0 (0 means no limit)
+            if params.max_tokens > 0:
+                payload["max_tokens"] = params.max_tokens
 
             if self.valves.DEBUG_MODE:
                 print(f"[Council] Requesting synthesis from {lead_model_id}")

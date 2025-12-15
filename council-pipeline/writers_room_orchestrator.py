@@ -119,9 +119,9 @@ class Pipe:
         )
 
         DEFAULT_MAX_TOKENS: int = Field(
-            default=2048,
-            ge=1,
-            description="Default max tokens to generate"
+            default=0,
+            ge=0,
+            description="Default max tokens to generate (0 = no limit)"
         )
 
         # ============================================================
@@ -813,8 +813,20 @@ class Pipe:
             for i, response in enumerate(successful_responses, 1):
                 yield f"<details>\n<summary>Response {i}: {response.model_id}</summary>\n\n"
                 yield f"{response.content}\n\n"
-                yield f"*({response.tokens_used} tokens, {response.latency_ms:.0f}ms)*\n\n"
-                yield "</details>\n\n"
+
+                # Show token/timing info
+                yield f"*({response.tokens_used} tokens, {response.latency_ms:.0f}ms)*"
+
+                # Warn if response was truncated
+                finish_reason = response.metadata.get("finish_reason") if response.metadata else None
+                if finish_reason in ["length", "max_tokens"]:
+                    yield f" ⚠️ **Response truncated due to length limit**"
+                elif finish_reason in ["content_filter", "safety"]:
+                    yield f" ⚠️ **Response stopped by content filter**"
+                elif finish_reason and finish_reason not in ["stop", "end_turn", None]:
+                    yield f" ⚠️ **Response stopped: {finish_reason}**"
+
+                yield "\n\n</details>\n\n"
 
         # ============================================================
         # PHASE 2: Anonymization (already done during overlapped execution)
@@ -1833,8 +1845,11 @@ class Pipe:
                 "stream": False,
                 "temperature": params.temperature,
                 "top_p": params.top_p,
-                "max_tokens": params.max_tokens,
             }
+
+            # Only set max_tokens if > 0 (0 means no limit)
+            if params.max_tokens > 0:
+                payload["max_tokens"] = params.max_tokens
 
             if params.frequency_penalty is not None:
                 payload["frequency_penalty"] = params.frequency_penalty
@@ -1862,7 +1877,22 @@ class Pipe:
 
                         # Safely extract content from response
                         if "choices" in data and len(data["choices"]) > 0:
-                            content = data["choices"][0].get("message", {}).get("content", "")
+                            choice = data["choices"][0]
+                            content = choice.get("message", {}).get("content", "")
+                            finish_reason = choice.get("finish_reason", "unknown")
+
+                            # Check if response was truncated or stopped unexpectedly
+                            if finish_reason not in ["stop", "end_turn", None]:
+                                if self.valves.DEBUG_MODE:
+                                    print(f"[Writer's Room] {model_id}: Response stopped with finish_reason='{finish_reason}' (may be truncated)")
+
+                                # For Gemini safety filters or length issues, log a warning
+                                if finish_reason in ["length", "max_tokens"]:
+                                    if self.valves.DEBUG_MODE:
+                                        print(f"[Writer's Room] {model_id}: Response truncated due to length limit")
+                                elif finish_reason in ["content_filter", "safety"]:
+                                    if self.valves.DEBUG_MODE:
+                                        print(f"[Writer's Room] {model_id}: Response stopped by content filter")
                         else:
                             raise ValueError(f"Invalid API response format: missing choices")
 
@@ -1881,7 +1911,11 @@ class Pipe:
                             tokens_used=tokens,
                             latency_ms=latency_ms,
                             parameters=params,
-                            metadata={"input_tokens": input_tokens, "output_tokens": output_tokens}
+                            metadata={
+                                "input_tokens": input_tokens,
+                                "output_tokens": output_tokens,
+                                "finish_reason": finish_reason
+                            }
                         )
                     else:
                         error_text = await response.text()
@@ -2183,8 +2217,11 @@ class Pipe:
                 "stream": False,
                 "temperature": params.temperature,
                 "top_p": params.top_p,
-                "max_tokens": params.max_tokens,
             }
+
+            # Only set max_tokens if > 0 (0 means no limit)
+            if params.max_tokens > 0:
+                payload["max_tokens"] = params.max_tokens
 
             # Make API call
             async with aiohttp.ClientSession() as session:
@@ -2203,7 +2240,14 @@ class Pipe:
 
                         # Safely extract content from response
                         if "choices" in data and len(data["choices"]) > 0:
-                            evaluation_text = data["choices"][0].get("message", {}).get("content", "")
+                            choice = data["choices"][0]
+                            evaluation_text = choice.get("message", {}).get("content", "")
+                            finish_reason = choice.get("finish_reason", "unknown")
+
+                            # Warn if evaluation response was truncated
+                            if finish_reason not in ["stop", "end_turn", None]:
+                                if self.valves.DEBUG_MODE:
+                                    print(f"[Writer's Room] {evaluator_model_id}: Evaluation stopped with finish_reason='{finish_reason}' (may be incomplete)")
                         else:
                             if self.valves.DEBUG_MODE:
                                 print(f"[Council] Invalid evaluation response format from {evaluator_model_id}")
@@ -2581,8 +2625,11 @@ class Pipe:
                 "stream": False,
                 "temperature": params.temperature,
                 "top_p": params.top_p,
-                "max_tokens": params.max_tokens,
             }
+
+            # Only set max_tokens if > 0 (0 means no limit)
+            if params.max_tokens > 0:
+                payload["max_tokens"] = params.max_tokens
 
             if self.valves.DEBUG_MODE:
                 print(f"[Council] Requesting synthesis from {lead_model_id}")
@@ -2714,8 +2761,11 @@ class Pipe:
                 "stream": False,
                 "temperature": params.temperature,
                 "top_p": params.top_p,
-                "max_tokens": params.max_tokens,
             }
+
+            # Only set max_tokens if > 0 (0 means no limit)
+            if params.max_tokens > 0:
+                payload["max_tokens"] = params.max_tokens
 
             async with aiohttp.ClientSession() as session:
                 async with session.post(

@@ -190,6 +190,12 @@ class ModelResponse(BaseModel):
         description="Probability score from verbalized sampling (0.0-1.0). None for single responses."
     )
 
+    # Additional metadata (e.g., finish_reason, input/output token breakdown)
+    metadata: Optional[Dict[str, Any]] = Field(
+        default=None,
+        description="Additional metadata about the response (finish_reason, token breakdown, etc.)"
+    )
+
     class Config:
         json_schema_extra = {
             "example": {
