@@ -34,7 +34,7 @@ from datetime import datetime
 # ============================================================================
 
 
-from pydantic import BaseModel, Field, validator
+from pydantic import BaseModel, Field, validator, ConfigDict
 from typing import Dict, List, Optional, Any, Literal, Union
 from datetime import datetime
 from enum import Enum
@@ -185,9 +185,7 @@ class ModelResponse(BaseModel):
 
     probability: Optional[float] = Field(
         default=None,
-        ge=0.0,
-        le=1.0,
-        description="Probability score from verbalized sampling (0.0-1.0). None for single responses."
+        description="Probability score from verbalized sampling (0.0-1.0). None for single responses. Note: Constraints removed for JSON schema compatibility."
     )
 
     # Additional metadata (e.g., finish_reason, input/output token breakdown)
@@ -689,8 +687,240 @@ class CouncilMetadata(BaseModel):
 
 
 # ============================================================================
+# STRUCTURED OUTPUT SCHEMAS
+# ============================================================================
+
+class StandardEvaluationResponse(BaseModel):
+    """
+    Structured evaluation response for standard Council evaluation
+    Contains EvaluationScores (4 criteria) and reasoning
+    """
+    model_config = ConfigDict(extra='forbid')
+
+    scores: EvaluationScores = Field(
+        ...,
+        description="Evaluation scores: accuracy, clarity, completeness, relevance (0-10)"
+    )
+
+    reasoning: str = Field(
+        ...,
+        description="Detailed reasoning for the scores provided"
+    )
+
+
+class CreativeEvaluationResponse(BaseModel):
+    """
+    Structured evaluation response for Writer's Room evaluation
+    Contains CreativeWritingScores (6 criteria) and reasoning
+    """
+    model_config = ConfigDict(extra='forbid')
+
+    scores: CreativeWritingScores = Field(
+        ...,
+        description="Creative writing scores: voice_authenticity, emotional_resonance, originality, style_consistency, narrative_coherence, llm_artifact_avoidance (0-10)"
+    )
+
+    reasoning: str = Field(
+        ...,
+        description="Detailed reasoning for the scores provided"
+    )
+
+
+class SingleStandardEvaluation(BaseModel):
+    """
+    Single evaluation within a bulk evaluation response (standard criteria)
+    """
+    model_config = ConfigDict(extra='forbid')
+
+    response_id: str = Field(
+        ...,
+        description="The anonymous response ID being evaluated"
+    )
+
+    scores: EvaluationScores = Field(
+        ...,
+        description="Evaluation scores: accuracy, clarity, completeness, relevance (0-10)"
+    )
+
+    reasoning: str = Field(
+        ...,
+        description="Detailed reasoning for the scores provided"
+    )
+
+
+class SingleCreativeEvaluation(BaseModel):
+    """
+    Single evaluation within a bulk evaluation response (creative criteria)
+    """
+    model_config = ConfigDict(extra='forbid')
+
+    response_id: str = Field(
+        ...,
+        description="The anonymous response ID being evaluated"
+    )
+
+    scores: CreativeWritingScores = Field(
+        ...,
+        description="Creative writing scores: voice_authenticity, emotional_resonance, originality, style_consistency, narrative_coherence, llm_artifact_avoidance (0-10)"
+    )
+
+    reasoning: str = Field(
+        ...,
+        description="Detailed reasoning for the scores provided"
+    )
+
+
+class BulkStandardEvaluationResponse(BaseModel):
+    """
+    Bulk evaluation response for Council (standard criteria)
+    Evaluates multiple responses in one API call for better comparative context
+    """
+    model_config = ConfigDict(extra='forbid')
+
+    evaluations: List[SingleStandardEvaluation] = Field(
+        ...,
+        min_length=1,
+        description="List of evaluations, one per response being evaluated"
+    )
+
+
+class BulkCreativeEvaluationResponse(BaseModel):
+    """
+    Bulk evaluation response for Writer's Room (creative criteria)
+    Evaluates multiple responses in one API call for better comparative context
+    """
+    model_config = ConfigDict(extra='forbid')
+
+    evaluations: List[SingleCreativeEvaluation] = Field(
+        ...,
+        min_length=1,
+        description="List of evaluations, one per response being evaluated"
+    )
+
+
+class ResponseVariant(BaseModel):
+    """
+    Single response variant for verbalized sampling
+    """
+    model_config = ConfigDict(extra='forbid')
+
+    text: str = Field(
+        ...,
+        description="The full creative content for this variant"
+    )
+
+    probability: Optional[float] = Field(
+        default=None,
+        description="Probability score (0.0-1.0) representing how unusual/risky this approach is. Note: Constraints removed for JSON schema compatibility."
+    )
+
+
+class MultipleResponses(BaseModel):
+    """
+    Wrapper for multiple response variants from a single model
+    Used for verbalized sampling to get diverse creative outputs
+    """
+    model_config = ConfigDict(extra='forbid')
+
+    variants: List[ResponseVariant] = Field(
+        ...,
+        min_length=1,
+        description="List of response variants, each with text and optional probability"
+    )
+
+
+# ============================================================================
 # HELPER FUNCTIONS
 # ============================================================================
+
+def _sanitize_schema_for_openai_strict(schema: dict) -> dict:
+    """
+    Recursively sanitize a JSON schema to comply with OpenAI's strict mode requirements.
+
+    OpenAI strict mode requires:
+    1. additionalProperties: false on ALL object types (including nested and $defs)
+    2. All properties must be in the 'required' array
+    3. No unsupported constructs like empty schemas or certain union types
+    4. $ref MUST be standalone - cannot have other keywords like 'description'
+
+    This function modifies the schema in-place and returns it.
+    """
+    if not isinstance(schema, dict):
+        return schema
+
+    # Process $defs first (these are referenced schemas)
+    if "$defs" in schema:
+        for def_name, def_schema in schema["$defs"].items():
+            _sanitize_schema_for_openai_strict(def_schema)
+
+    # CRITICAL: If this has $ref, it MUST be standalone (OpenAI requirement)
+    # Remove any other keywords like 'description', 'title', 'default', etc.
+    if "$ref" in schema:
+        ref_value = schema["$ref"]
+        # Keep only the $ref, remove everything else
+        schema.clear()
+        schema["$ref"] = ref_value
+        return schema
+
+    # Handle object types
+    if schema.get("type") == "object":
+        # Set additionalProperties to false
+        schema["additionalProperties"] = False
+
+        # Ensure all properties are required
+        if "properties" in schema:
+            # Make all properties required
+            schema["required"] = list(schema["properties"].keys())
+
+            # Recursively process nested properties
+            for prop_name, prop_schema in schema["properties"].items():
+                _sanitize_schema_for_openai_strict(prop_schema)
+
+    # Handle array types - process items schema
+    if schema.get("type") == "array" and "items" in schema:
+        _sanitize_schema_for_openai_strict(schema["items"])
+
+    # Handle allOf, anyOf, oneOf
+    for key in ["allOf", "anyOf", "oneOf"]:
+        if key in schema:
+            for sub_schema in schema[key]:
+                _sanitize_schema_for_openai_strict(sub_schema)
+
+    return schema
+
+
+def get_structured_output_format(schema_model: type[BaseModel], name: str, strict: bool = True) -> dict:
+    """
+    Generate OpenAI/OpenRouter compatible response_format for structured outputs
+
+    Args:
+        schema_model: Pydantic model class to use as schema
+        name: Name for the schema (e.g., "evaluation_response")
+        strict: Whether to enforce strict schema adherence
+
+    Returns:
+        Dict ready to use as response_format parameter
+
+    Note:
+        When strict=True, the schema is sanitized to comply with OpenAI's
+        strict mode requirements (additionalProperties: false on all objects,
+        all properties required).
+    """
+    schema = schema_model.model_json_schema()
+
+    # Sanitize schema for OpenAI strict mode compliance
+    if strict:
+        _sanitize_schema_for_openai_strict(schema)
+
+    return {
+        "type": "json_schema",
+        "json_schema": {
+            "name": name,
+            "schema": schema,
+            "strict": strict
+        }
+    }
+
 
 def create_council_metadata() -> CouncilMetadata:
     """Create a new CouncilMetadata instance with defaults"""
@@ -831,23 +1061,23 @@ class Pipe:
         # ============================================================
         MODELS_TO_QUERY: str = Field(
             default="gpt-5.1,anthropic/claude-sonnet-4.5,groq.moonshotai/kimi-k2-instruct",
-            description="Comma-separated list of model IDs to query for initial responses"
+            description="Comma-separated list of model IDs to query for initial responses (default: gpt-5.1,anthropic/claude-sonnet-4.5,groq.moonshotai/kimi-k2-instruct)"
         )
 
         EVALUATION_MODELS: str = Field(
             default="",
-            description="Comma-separated list of model IDs to use for evaluation (leave empty to use same models as MODELS_TO_QUERY)"
+            description="Comma-separated list of model IDs to use for evaluation, leave empty to use same models as MODELS_TO_QUERY (default: empty)"
         )
 
         LEAD_SYNTHESIZER: str = Field(
             default="auto",
-            description="Lead model for synthesis ('auto' for highest-scoring, or specific model ID)"
+            description="Lead model for synthesis: 'auto' for highest-scoring, or specific model ID (default: auto)"
         )
 
         MIN_MODELS_REQUIRED: int = Field(
             default=3,
             ge=2,
-            description="Minimum number of successful model responses required (recommended: 3-5, not total models configured)"
+            description="Minimum number of successful model responses required, recommended 3-5, not total models configured (default: 3)"
         )
 
         # ============================================================
@@ -865,20 +1095,20 @@ class Pipe:
             default=0.7,
             ge=0.0,
             le=2.0,
-            description="Default temperature for all models"
+            description="Default temperature for all models (default: 0.7)"
         )
 
         DEFAULT_TOP_P: float = Field(
             default=1.0,
             ge=0.0,
             le=1.0,
-            description="Default top_p (nucleus sampling)"
+            description="Default top_p nucleus sampling (default: 1.0)"
         )
 
         DEFAULT_MAX_TOKENS: int = Field(
             default=0,
             ge=0,
-            description="Default max tokens to generate (0 = no limit)"
+            description="Default max tokens to generate, 0 = no limit (default: 0)"
         )
 
         # ============================================================
@@ -888,41 +1118,41 @@ class Pipe:
             default=0.3,
             ge=0.0,
             le=1.0,
-            description="Weight for accuracy criterion"
+            description="Weight for accuracy criterion (default: 0.3)"
         )
 
         EVALUATION_WEIGHT_CLARITY: float = Field(
             default=0.25,
             ge=0.0,
             le=1.0,
-            description="Weight for clarity criterion"
+            description="Weight for clarity criterion (default: 0.25)"
         )
 
         EVALUATION_WEIGHT_COMPLETENESS: float = Field(
             default=0.25,
             ge=0.0,
             le=1.0,
-            description="Weight for completeness criterion"
+            description="Weight for completeness criterion (default: 0.25)"
         )
 
         EVALUATION_WEIGHT_RELEVANCE: float = Field(
             default=0.2,
             ge=0.0,
             le=1.0,
-            description="Weight for relevance criterion"
+            description="Weight for relevance criterion (default: 0.2)"
         )
 
         TOP_N_FOR_SYNTHESIS: int = Field(
             default=0,
             ge=0,
-            description="Number of top-ranked responses to use for synthesis (0 = all responses, regardless of score)"
+            description="Number of top-ranked responses to use for synthesis, 0 = all responses regardless of score (default: 0)"
         )
 
         MIN_SCORE_FOR_SYNTHESIS: float = Field(
             default=0.0,
             ge=0.0,
             le=10.0,
-            description="Minimum score threshold for synthesis (0 = include all, even low-scoring responses). Responses below this score are excluded from synthesis input."
+            description="Minimum score threshold for synthesis, 0 = include all even low-scoring responses, responses below this are excluded (default: 0.0)"
         )
 
         # ============================================================
@@ -931,20 +1161,20 @@ class Pipe:
         TIMEOUT_SECONDS: int = Field(
             default=60,
             ge=5,
-            le=360,
-            description="Timeout for individual model queries (seconds)"
+            le=600,
+            description="Timeout for individual model queries in seconds (default: 60)"
         )
 
         EVAL_TIMEOUT_SECONDS: int = Field(
             default=90,
             ge=5,
-            le=360,
-            description="Timeout for evaluation queries (seconds). Often needs to be higher due to rate limits."
+            le=600,
+            description="Timeout for evaluation queries in seconds, often needs to be higher due to rate limits (default: 90)"
         )
 
         ENABLE_PARALLEL_REQUESTS: bool = Field(
             default=True,
-            description="Enable parallel model queries (recommended)"
+            description="Enable parallel model queries, recommended for performance (default: true)"
         )
 
         # ============================================================
@@ -952,7 +1182,7 @@ class Pipe:
         # ============================================================
         SYNTHESIS_MODE: str = Field(
             default="full",
-            description="Synthesis mode: 'full' (synthesize from all responses), 'highest_rated' (return only the top-scoring response), 'none' (show responses and scores only, no synthesis)"
+            description="Synthesis mode: 'full' (synthesize from all), 'highest_rated' (return top-scoring only), 'none' (show responses and scores only) (default: full)"
         )
 
         # ============================================================
@@ -960,17 +1190,17 @@ class Pipe:
         # ============================================================
         SHOW_TOKEN_USAGE: bool = Field(
             default=True,
-            description="Show detailed token usage breakdown per model (initial + evaluation)"
+            description="Show detailed token usage breakdown per model for initial and evaluation queries (default: true)"
         )
 
         MODEL_COSTS_JSON: str = Field(
             default="{}",
-            description='Per-model costs as JSON: {"gpt-4": {"input": 0.03, "output": 0.06}, "claude-3-opus": {"input": 0.015, "output": 0.075}}. Costs are per 1M tokens.'
+            description='Per-model costs as JSON: {"gpt-4": {"input": 0.03, "output": 0.06}, "claude-3-opus": {"input": 0.015, "output": 0.075}}, costs are per 1M tokens (default: {})'
         )
 
         SHOW_COST_ESTIMATE: bool = Field(
             default=False,
-            description="Show estimated cost breakdown (requires MODEL_COSTS_JSON to be configured)"
+            description="Show estimated cost breakdown, requires MODEL_COSTS_JSON to be configured (default: false)"
         )
 
         # ============================================================
@@ -978,27 +1208,27 @@ class Pipe:
         # ============================================================
         SHOW_EVALUATION_SCORES: bool = Field(
             default=True,
-            description="Include evaluation scores summary in output"
+            description="Include evaluation scores summary in output (default: true)"
         )
 
         SHOW_INDIVIDUAL_RESPONSES: bool = Field(
-            default=False,
-            description="Include all individual model responses in output (can be very large!)"
+            default=True,
+            description="Include all individual model responses in output, can be very large (default: true)"
         )
 
         SHOW_REASONING: bool = Field(
-            default=False,
-            description="Include detailed evaluation reasoning in output (can be very large!)"
+            default=True,
+            description="Include detailed evaluation reasoning in output, can be very large (default: true)"
         )
 
         SHOW_PROGRESS: bool = Field(
             default=True,
-            description="Stream progress updates during execution (queries, evaluations, synthesis phases)"
+            description="Stream progress updates during execution: queries, evaluations, synthesis phases (default: true)"
         )
 
         ENABLE_STREAMING: bool = Field(
             default=True,
-            description="Stream output progressively as Council works (recommended for transparency)"
+            description="Stream output progressively as Council works, recommended for transparency (default: true)"
         )
 
         # ============================================================
@@ -1008,49 +1238,49 @@ class Pipe:
         # Initial Query Techniques
         QUERY_USE_HERMENEUTIC_CIRCLE: bool = Field(
             default=True,
-            description="Apply hermeneutic circle (parts/whole interplay) in initial responses"
+            description="Apply hermeneutic circle approach (parts/whole interplay) in initial responses (default: true)"
         )
 
         QUERY_USE_CHAIN_OF_THOUGHT: bool = Field(
             default=False,
-            description="Request step-by-step reasoning in initial responses"
+            description="Request step-by-step reasoning in initial responses (default: false)"
         )
 
         QUERY_USE_VERBALIZED_SAMPLING: bool = Field(
             default=False,
-            description="Request models to show intermediate thinking in initial responses"
+            description="Request models to show intermediate thinking in initial responses (default: false)"
         )
 
         # Evaluation Techniques
         EVAL_USE_HERMENEUTIC_CIRCLE: bool = Field(
             default=True,
-            description="Apply hermeneutic circle in evaluations"
+            description="Apply hermeneutic circle approach in evaluations (default: true)"
         )
 
         EVAL_USE_VERBALIZED_SAMPLING: bool = Field(
             default=True,
-            description="Request detailed reasoning process in evaluations"
+            description="Request detailed reasoning process in evaluations (default: true)"
         )
 
         EVAL_USE_SOCRATIC_QUESTIONING: bool = Field(
             default=True,
-            description="Probe assumptions, gaps, and weaknesses in evaluations"
+            description="Probe assumptions, gaps, and weaknesses in evaluations (default: true)"
         )
 
         EVAL_USE_ADVERSARIAL_STANCE: bool = Field(
             default=True,
-            description="Actively look for flaws and edge cases in evaluations"
+            description="Actively look for flaws and edge cases in evaluations (default: true)"
         )
 
         EVAL_USE_CONSTITUTIONAL_PRINCIPLES: bool = Field(
             default=True,
-            description="Justify scores against explicit quality principles in evaluations"
+            description="Justify scores against explicit quality principles in evaluations (default: true)"
         )
 
         # Synthesis Techniques
         SYNTH_USE_META_COGNITIVE: bool = Field(
             default=True,
-            description="Reflect on uncertainty and confidence levels in synthesis"
+            description="Reflect on uncertainty and confidence levels in synthesis (default: true)"
         )
 
         # ============================================================
@@ -1066,51 +1296,11 @@ class Pipe:
         # See _build_synthesis_prompt() method for the actual template construction.
 
         # ============================================================
-        # Score Parsing Patterns
-        # ============================================================
-        ACCURACY_PATTERN: str = Field(
-            default=r"ACCURACY:\s*(\d+(?:\.\d+)?)",
-            description="Regex pattern to extract accuracy score"
-        )
-
-        CLARITY_PATTERN: str = Field(
-            default=r"CLARITY:\s*(\d+(?:\.\d+)?)",
-            description="Regex pattern to extract clarity score"
-        )
-
-        COMPLETENESS_PATTERN: str = Field(
-            default=r"COMPLETENESS:\s*(\d+(?:\.\d+)?)",
-            description="Regex pattern to extract completeness score"
-        )
-
-        RELEVANCE_PATTERN: str = Field(
-            default=r"RELEVANCE:\s*(\d+(?:\.\d+)?)",
-            description="Regex pattern to extract relevance score"
-        )
-
-        REASONING_PATTERN: str = Field(
-            default=r"REASONING:\s*(.+?)(?=\n\n|\Z)",
-            description="Regex pattern to extract reasoning text"
-        )
-
-        DEFAULT_SCORE: float = Field(
-            default=5.0,
-            ge=0.0,
-            le=10.0,
-            description="Default score if parsing fails"
-        )
-
-        STRICT_SCORE_PARSING: bool = Field(
-            default=False,
-            description="If True, reject evaluations with missing scores. If False, use defaults."
-        )
-
-        # ============================================================
         # Debug Configuration
         # ============================================================
         DEBUG_MODE: bool = Field(
             default=False,
-            description="Enable verbose debug logging"
+            description="Enable verbose debug logging (default: false)"
         )
 
     def __init__(self):
@@ -1970,6 +2160,149 @@ class Pipe:
 
         return ""
 
+    def _supports_strict_json_schema(self, model_id: str) -> bool:
+        """
+        Check if a model supports OpenAI's strict JSON schema response_format.
+
+        Returns True for providers with TESTED working structured output support:
+        - OpenAI models (gpt-*, o1*, o3*) - native support
+        - Google/Gemini models - works via OpenRouter
+        - Groq models (groq.*) - native support
+
+        Returns False for providers where structured outputs don't work reliably:
+        - Anthropic/Claude via OpenRouter - ignores response_format, returns markdown
+        """
+        model_lower = model_id.lower()
+
+        # Anthropic/Claude models - OpenRouter passes response_format but Claude ignores it
+        # Must use prompt-based JSON instructions instead
+        if "anthropic" in model_lower or "claude" in model_lower:
+            return False
+
+        # OpenAI models - native support, works reliably
+        if model_lower.startswith("gpt-"):
+            return True
+        if model_lower.startswith("o1") or model_lower.startswith("o3"):
+            return True
+
+        # Google/Gemini models - works via OpenRouter
+        if "gemini" in model_lower:
+            return True
+        if model_lower.startswith("google/"):
+            return True
+
+        # Groq models - native support
+        if model_lower.startswith("groq."):
+            return True
+
+        # Mistral models - test carefully, may need fallback
+        if "mistral" in model_lower:
+            return True
+
+        # Default: use fallback (safer)
+        if self.valves.DEBUG_MODE:
+            print(f"[Council] Unknown model '{model_id}' - using prompt-based JSON fallback")
+        return False
+
+    def _get_json_format_instructions(self, schema_type: str = "single") -> str:
+        """
+        Get JSON format instructions to append to prompts for models that don't support response_format.
+        
+        Args:
+            schema_type: "single" for StandardEvaluationResponse, "bulk" for BulkStandardEvaluationResponse
+        """
+        if schema_type == "single":
+            return '''
+
+**IMPORTANT: Output your response as valid JSON in this exact format:**
+```json
+{
+  "scores": {
+    "accuracy": <number 0-10>,
+    "clarity": <number 0-10>,
+    "completeness": <number 0-10>,
+    "relevance": <number 0-10>
+  },
+  "reasoning": "<your detailed reasoning as a single string>"
+}
+```
+Output ONLY the JSON object, no additional text before or after.'''
+        else:  # bulk
+            return '''
+
+**IMPORTANT: Output your response as valid JSON in this exact format:**
+```json
+{
+  "evaluations": [
+    {
+      "response_id": "<the anonymous response ID>",
+      "scores": {
+        "accuracy": <number 0-10>,
+        "clarity": <number 0-10>,
+        "completeness": <number 0-10>,
+        "relevance": <number 0-10>
+      },
+      "reasoning": "<your detailed reasoning>"
+    }
+  ]
+}
+```
+Include one evaluation object per response. Output ONLY the JSON object, no additional text.'''
+
+    def _parse_evaluation_json_fallback(self, raw_response: str, evaluator_model_id: str) -> Optional[dict]:
+        """
+        Parse evaluation JSON with fallback strategies for models without strict schema support.
+        
+        Tries multiple parsing strategies:
+        1. Direct JSON parse
+        2. Extract JSON from markdown code blocks
+        3. Extract JSON from anywhere in the response
+        """
+        # Strategy 1: Direct JSON parse
+        try:
+            return json.loads(raw_response.strip())
+        except json.JSONDecodeError:
+            pass
+        
+        # Strategy 2: Extract from markdown code block
+        code_block_match = re.search(r'```(?:json)?\s*(\{.*?\})\s*```', raw_response, re.DOTALL)
+        if code_block_match:
+            try:
+                return json.loads(code_block_match.group(1))
+            except json.JSONDecodeError:
+                pass
+        
+        # Strategy 3: Find JSON object anywhere in response
+        json_match = re.search(r'\{[^{}]*"scores"[^{}]*\{[^{}]*\}[^{}]*\}', raw_response, re.DOTALL)
+        if json_match:
+            try:
+                return json.loads(json_match.group(0))
+            except json.JSONDecodeError:
+                pass
+        
+        # Strategy 4: More aggressive - find any JSON object with scores
+        try:
+            # Find the outermost braces
+            start = raw_response.find('{')
+            if start != -1:
+                depth = 0
+                for i, char in enumerate(raw_response[start:], start):
+                    if char == '{':
+                        depth += 1
+                    elif char == '}':
+                        depth -= 1
+                        if depth == 0:
+                            potential_json = raw_response[start:i+1]
+                            return json.loads(potential_json)
+        except (json.JSONDecodeError, ValueError):
+            pass
+        
+        if self.valves.DEBUG_MODE:
+            print(f"[Council] {evaluator_model_id}: Could not parse JSON from response")
+            print(f"[Council] Raw response preview: {raw_response[:500]}...")
+        
+        return None
+
     def _build_initial_query_system_message(self) -> str:
         """Build system message for initial query based on enabled prompting techniques"""
         instructions = []
@@ -2481,102 +2814,68 @@ class Pipe:
 
         return mapping
 
-    def _parse_scores(self, text: str) -> Optional[EvaluationScores]:
-        """
-        Parse evaluation scores from text using regex patterns from Valves
+    def _build_bulk_evaluation_prompt(self, responses: List[ModelResponse]) -> str:
+        """Build bulk evaluation prompt with all anonymous responses"""
+        sections = []
 
-        Returns EvaluationScores or None if strict mode and scores missing
-        """
-        # Extract individual scores
-        accuracy = self._extract_single_score(text, self.valves.ACCURACY_PATTERN, "accuracy")
-        clarity = self._extract_single_score(text, self.valves.CLARITY_PATTERN, "clarity")
-        completeness = self._extract_single_score(text, self.valves.COMPLETENESS_PATTERN, "completeness")
-        relevance = self._extract_single_score(text, self.valves.RELEVANCE_PATTERN, "relevance")
+        # Opening
+        sections.append("You are participating in an anonymous peer review of AI responses.")
+        sections.append(f"Your task is to evaluate {len(responses)} anonymous responses.")
+        sections.append("Compare them directly, calibrate your scores relative to each other, and be objective and critical.")
+        sections.append("")
 
-        # Check if any scores are None
-        if self.valves.STRICT_SCORE_PARSING:
-            if None in [accuracy, clarity, completeness, relevance]:
-                if self.valves.DEBUG_MODE:
-                    print("[Council] Strict mode: Some scores missing, rejecting")
-                return None
+        # Add same prompting techniques as single evaluation
+        if self.valves.EVAL_USE_HERMENEUTIC_CIRCLE:
+            sections.append("**Hermeneutic Circle Approach:**")
+            sections.append("For each response, move iteratively between specific details and the overall response.")
+            sections.append("")
 
-        # Use defaults for missing scores in non-strict mode
-        accuracy = accuracy if accuracy is not None else self.valves.DEFAULT_SCORE
-        clarity = clarity if clarity is not None else self.valves.DEFAULT_SCORE
-        completeness = completeness if completeness is not None else self.valves.DEFAULT_SCORE
-        relevance = relevance if relevance is not None else self.valves.DEFAULT_SCORE
+        if self.valves.EVAL_USE_VERBALIZED_SAMPLING:
+            sections.append("**Show Your Thinking:**")
+            sections.append("Reveal your evaluation thought process for each response.")
+            sections.append("")
 
-        # Clamp scores to valid range (0-10)
-        accuracy = max(0.0, min(10.0, accuracy))
-        clarity = max(0.0, min(10.0, clarity))
-        completeness = max(0.0, min(10.0, completeness))
-        relevance = max(0.0, min(10.0, relevance))
+        if self.valves.EVAL_USE_SOCRATIC_QUESTIONING:
+            sections.append("**Socratic Examination:**")
+            sections.append("For each response, probe: What assumptions? What's missing? What edge cases?")
+            sections.append("")
 
-        return EvaluationScores(
-            accuracy=accuracy,
-            clarity=clarity,
-            completeness=completeness,
-            relevance=relevance
-        )
+        if self.valves.EVAL_USE_ADVERSARIAL_STANCE:
+            sections.append("**Critical Analysis:**")
+            sections.append("Actively look for flaws, weaknesses, and potential issues in each response.")
+            sections.append("")
 
-    def _extract_single_score(self, text: str, pattern: str, score_name: str) -> Optional[float]:
-        """
-        Extract a single score using a regex pattern
+        # List all responses with their IDs
+        sections.append("**Responses to Evaluate:**")
+        sections.append("")
+        for i, response in enumerate(responses, 1):
+            sections.append(f"--- Response {response.anonymous_id} ---")
+            sections.append(response.content)
+            sections.append("")
 
-        Returns extracted score as float, or None if not found
-        """
-        try:
-            match = re.search(pattern, text, re.IGNORECASE | re.DOTALL)
-            if match:
-                score_str = match.group(1).strip()
-                score = float(score_str)
+        sections.append("**Your Task:**")
+        sections.append("Evaluate each response using structured output format.")
+        sections.append("You'll return a JSON object with one evaluation per response.")
+        sections.append("Include the response_id, scores (0-10 for accuracy, clarity, completeness, relevance), and detailed reasoning.")
 
-                if self.valves.DEBUG_MODE:
-                    print(f"[Council] {score_name}: {score}")
+        return "\n".join(sections)
 
-                return score
-            else:
-                if self.valves.DEBUG_MODE:
-                    print(f"[Council] {score_name}: not found")
-                return None
-
-        except Exception as e:
-            if self.valves.DEBUG_MODE:
-                print(f"[Council] Error extracting {score_name}: {e}")
-            return None
-
-    def _extract_reasoning(self, text: str) -> str:
-        """
-        Extract reasoning text using regex pattern from Valves
-
-        Returns extracted reasoning, or empty string if not found
-        """
-        try:
-            match = re.search(self.valves.REASONING_PATTERN, text, re.IGNORECASE | re.DOTALL)
-            if match:
-                reasoning = match.group(1).strip()
-                return reasoning
-            return ""
-
-        except Exception as e:
-            if self.valves.DEBUG_MODE:
-                print(f"[Council] Error extracting reasoning: {e}")
-            return ""
-
-    async def _query_for_evaluation(
+    async def _query_for_bulk_evaluation(
         self,
         evaluator_model_id: str,
-        target_response: ModelResponse,
+        target_responses: List[ModelResponse],
         params: ModelParameters,
         request: Any,
         user: Optional[dict],
         metadata: CouncilMetadata,
-    ) -> Optional[Evaluation]:
+    ) -> List[Evaluation]:
         """
-        Query a model to evaluate an anonymous response
+        Query a model to evaluate ALL anonymous responses in one API call
 
-        Uses inline evaluation prompt from Valves.
-        Parses scores using regex patterns from Valves.
+        Supports both strict JSON schema (for compatible models) and
+        fallback JSON parsing (for models like Claude, Groq).
+        
+        Returns list of Evaluation objects (one per response)
         """
         try:
             # Get base URL and auth token
@@ -2585,11 +2884,20 @@ class Pipe:
 
             if not auth_token:
                 if self.valves.DEBUG_MODE:
-                    print(f"[Council] No auth token for evaluation")
-                return None
+                    print(f"[Council] No auth token for bulk evaluation")
+                return []
 
-            # Build evaluation prompt dynamically based on enabled techniques
-            evaluation_prompt = self._build_evaluation_prompt(target_response.content)
+            # Build bulk evaluation prompt with all responses
+            evaluation_prompt = self._build_bulk_evaluation_prompt(target_responses)
+            
+            # Check if model supports strict JSON schema
+            use_strict_schema = self._supports_strict_json_schema(evaluator_model_id)
+            
+            if not use_strict_schema:
+                # Add JSON format instructions for models without structured output support
+                evaluation_prompt += self._get_json_format_instructions("bulk")
+                if self.valves.DEBUG_MODE:
+                    print(f"[Council] {evaluator_model_id}: Using prompt-based JSON for bulk eval (no strict schema support)")
 
             # Build request payload
             payload = {
@@ -2604,6 +2912,13 @@ class Pipe:
                 "temperature": params.temperature,
                 "top_p": params.top_p,
             }
+            
+            # Only add response_format for models that support it
+            if use_strict_schema:
+                payload["response_format"] = get_structured_output_format(
+                    BulkStandardEvaluationResponse,
+                    "bulk_standard_evaluation"
+                )
 
             # Only set max_tokens if > 0 (0 means no limit)
             if params.max_tokens > 0:
@@ -2626,7 +2941,159 @@ class Pipe:
 
                         # Safely extract content from response
                         if "choices" in data and len(data["choices"]) > 0:
-                            evaluation_text = data["choices"][0].get("message", {}).get("content", "")
+                            choice = data["choices"][0]
+                            evaluation_json = choice.get("message", {}).get("content", "")
+                            finish_reason = choice.get("finish_reason", "unknown")
+
+                            # Warn if evaluation response was truncated
+                            if finish_reason not in ["stop", "end_turn", None]:
+                                if self.valves.DEBUG_MODE:
+                                    print(f"[Council] {evaluator_model_id}: Bulk evaluation stopped with finish_reason='{finish_reason}' (may be incomplete)")
+                        else:
+                            if self.valves.DEBUG_MODE:
+                                print(f"[Council] Invalid bulk evaluation response format from {evaluator_model_id}")
+                            return []
+
+                        # Track evaluation tokens
+                        usage = data.get("usage", {})
+                        input_tokens = usage.get("prompt_tokens", 0)
+                        output_tokens = usage.get("completion_tokens", 0)
+                        self._track_tokens(evaluator_model_id, "evaluation", input_tokens, output_tokens)
+
+                        # Parse JSON response - use appropriate strategy based on model support
+                        try:
+                            if use_strict_schema:
+                                # Strict schema - use Pydantic validation directly
+                                bulk_response = BulkStandardEvaluationResponse.model_validate_json(evaluation_json)
+                            else:
+                                # Fallback parsing for models without strict schema support
+                                parsed = self._parse_evaluation_json_fallback(evaluation_json, evaluator_model_id)
+                                if parsed is None:
+                                    return []
+                                bulk_response = BulkStandardEvaluationResponse.model_validate(parsed)
+
+                            # Convert to individual Evaluation objects
+                            evaluations = []
+                            for single_eval in bulk_response.evaluations:
+                                evaluation = Evaluation(
+                                    evaluator_model_id=evaluator_model_id,
+                                    target_anonymous_id=single_eval.response_id,
+                                    scores=single_eval.scores,
+                                    reasoning=single_eval.reasoning,
+                                    raw_response=evaluation_json
+                                )
+                                evaluations.append(evaluation)
+
+                            if self.valves.DEBUG_MODE:
+                                print(f"[Council] {evaluator_model_id}: Bulk evaluated {len(evaluations)} responses")
+
+                            return evaluations
+
+                        except Exception as parse_error:
+                            if self.valves.DEBUG_MODE:
+                                print(f"[Council] Failed to parse bulk structured response from {evaluator_model_id}: {parse_error}")
+                                print(f"[Council] Raw response: {evaluation_json[:500]}...")
+                            return []
+                    else:
+                        if self.valves.DEBUG_MODE:
+                            error_text = await response.text()
+                            print(f"[Council] Bulk evaluation query failed: HTTP {response.status}")
+                            print(f"[Council] Error: {error_text[:300]}...")
+                        return []
+
+        except Exception as e:
+            if self.valves.DEBUG_MODE:
+                print(f"[Council] Error in bulk evaluation query: {e}")
+            return []
+
+    async def _query_for_evaluation(
+        self,
+        evaluator_model_id: str,
+        target_response: ModelResponse,
+        params: ModelParameters,
+        request: Any,
+        user: Optional[dict],
+        metadata: CouncilMetadata,
+    ) -> Optional[Evaluation]:
+        """
+        Query a model to evaluate an anonymous response
+
+        Uses inline evaluation prompt from Valves.
+        Supports both strict JSON schema (for compatible models) and
+        fallback JSON parsing (for models like Claude, Groq).
+        """
+        try:
+            # Get base URL and auth token
+            base_url = f"{request.url.scheme}://{request.url.netloc}" if request else "http://localhost:3000"
+            auth_token = self._extract_token(request)
+
+            if not auth_token:
+                if self.valves.DEBUG_MODE:
+                    print(f"[Council] No auth token for evaluation")
+                return None
+
+            # Build evaluation prompt dynamically based on enabled techniques
+            evaluation_prompt = self._build_evaluation_prompt(target_response.content)
+            
+            # Check if model supports strict JSON schema
+            use_strict_schema = self._supports_strict_json_schema(evaluator_model_id)
+            
+            if not use_strict_schema:
+                # Add JSON format instructions for models without structured output support
+                evaluation_prompt += self._get_json_format_instructions("single")
+                if self.valves.DEBUG_MODE:
+                    print(f"[Council] {evaluator_model_id}: Using prompt-based JSON (no strict schema support)")
+
+            # Build request payload
+            payload = {
+                "model": evaluator_model_id,
+                "messages": [
+                    {
+                        "role": "user",
+                        "content": evaluation_prompt
+                    }
+                ],
+                "stream": False,
+                "temperature": params.temperature,
+                "top_p": params.top_p,
+            }
+            
+            # Only add response_format for models that support it
+            if use_strict_schema:
+                payload["response_format"] = get_structured_output_format(
+                    StandardEvaluationResponse,
+                    "standard_evaluation"
+                )
+
+            # Only set max_tokens if > 0 (0 means no limit)
+            if params.max_tokens > 0:
+                payload["max_tokens"] = params.max_tokens
+
+            # Make API call
+            async with aiohttp.ClientSession() as session:
+                async with session.post(
+                    f"{base_url}/api/chat/completions",
+                    headers={
+                        "Authorization": f"Bearer {auth_token}",
+                        "Content-Type": "application/json"
+                    },
+                    json=payload,
+                    timeout=aiohttp.ClientTimeout(total=self.valves.EVAL_TIMEOUT_SECONDS)
+                ) as response:
+
+                    if response.status == 200:
+                        data = await response.json()
+
+                        # Safely extract content from response
+                        if "choices" in data and len(data["choices"]) > 0:
+                            choice = data["choices"][0]
+                            evaluation_json = choice.get("message", {}).get("content", "")
+                            finish_reason = choice.get("finish_reason", "unknown")
+
+                            # Warn if evaluation response was truncated
+                            if finish_reason not in ["stop", "end_turn", None]:
+                                if self.valves.DEBUG_MODE:
+                                    print(f"[Council] {evaluator_model_id}: Evaluation stopped with finish_reason='{finish_reason}' (may be incomplete)")
                         else:
                             if self.valves.DEBUG_MODE:
                                 print(f"[Council] Invalid evaluation response format from {evaluator_model_id}")
@@ -2638,28 +3105,37 @@ class Pipe:
                         output_tokens = usage.get("completion_tokens", 0)
                         self._track_tokens(evaluator_model_id, "evaluation", input_tokens, output_tokens)
 
-                        # Parse scores from the evaluation text
-                        scores = self._parse_scores(evaluation_text)
-
-                        if scores:
-                            # Extract reasoning
-                            reasoning = self._extract_reasoning(evaluation_text)
+                        # Parse JSON response - use appropriate strategy based on model support
+                        try:
+                            if use_strict_schema:
+                                # Strict schema - use Pydantic validation directly
+                                eval_response = StandardEvaluationResponse.model_validate_json(evaluation_json)
+                            else:
+                                # Fallback parsing for models without strict schema support
+                                parsed = self._parse_evaluation_json_fallback(evaluation_json, evaluator_model_id)
+                                if parsed is None:
+                                    return None
+                                eval_response = StandardEvaluationResponse.model_validate(parsed)
 
                             evaluation = Evaluation(
                                 evaluator_model_id=evaluator_model_id,
                                 target_anonymous_id=target_response.anonymous_id,
-                                scores=scores,
-                                reasoning=reasoning
+                                scores=eval_response.scores,
+                                reasoning=eval_response.reasoning,
+                                raw_response=evaluation_json
                             )
 
                             return evaluation
-                        else:
+                        except Exception as parse_error:
                             if self.valves.DEBUG_MODE:
-                                print(f"[Council] Failed to parse scores from {evaluator_model_id}")
+                                print(f"[Council] Failed to parse structured response from {evaluator_model_id}: {parse_error}")
+                                print(f"[Council] Raw response: {evaluation_json[:500]}...")
                             return None
                     else:
                         if self.valves.DEBUG_MODE:
+                            error_text = await response.text()
                             print(f"[Council] Evaluation query failed: HTTP {response.status}")
+                            print(f"[Council] Error: {error_text[:300]}...")
                         return None
 
         except Exception as e:
@@ -2676,56 +3152,66 @@ class Pipe:
         metadata: CouncilMetadata,
     ) -> List[Evaluation]:
         """
-        Distribute anonymous responses to evaluation models for scoring
+        Distribute anonymous responses to evaluation models for scoring (BULK MODE)
 
-        Each evaluation model evaluates ALL anonymous responses.
-        Uses self.evaluation_models which may differ from generation models.
+        Each evaluation model evaluates ALL anonymous responses in ONE API call.
+        This provides better comparative context and is far more efficient.
 
-        All evaluations run in parallel for maximum performance.
+        All evaluators run in parallel for maximum performance.
         """
         # Get model parameters for evaluation queries
         model_params = self._get_model_params()
 
-        # Build list of all evaluation tasks (all independent, can run in parallel)
+        # Build list of bulk evaluation tasks (one per evaluator)
         tasks = []
         for evaluator_model_id in self.evaluation_models:
-            for target in responses:
-                if self.valves.DEBUG_MODE:
-                    print(f"[Council] Queuing: {evaluator_model_id} evaluating {target.anonymous_id}")
+            if self.valves.DEBUG_MODE:
+                print(f"[Council] Queuing BULK: {evaluator_model_id} evaluating {len(responses)} responses")
 
-                task = self._query_for_evaluation(
-                    evaluator_model_id=evaluator_model_id,
-                    target_response=target,
-                    params=model_params.get(evaluator_model_id, model_params[self.available_models[0]]),
-                    request=request,
-                    user=user,
-                    metadata=metadata
-                )
-                tasks.append(task)
+            task = self._query_for_bulk_evaluation(
+                evaluator_model_id=evaluator_model_id,
+                target_responses=responses,
+                params=model_params.get(evaluator_model_id, model_params[self.available_models[0]]),
+                request=request,
+                user=user,
+                metadata=metadata
+            )
+            tasks.append(task)
 
-        # Execute ALL evaluation queries in parallel
+        # Execute ALL bulk evaluation queries in parallel
         if self.valves.DEBUG_MODE:
-            print(f"[Council] Executing {len(tasks)} evaluations in parallel...")
+            print(f"[Council] Executing {len(tasks)} BULK evaluations in parallel...")
 
         results = await asyncio.gather(*tasks, return_exceptions=True)
 
-        # Filter out None results and exceptions (failed evaluations)
-        evaluations = [ev for ev in results if ev is not None and not isinstance(ev, Exception)]
-        none_results = [r for r in results if r is None]
-        exceptions = [r for r in results if isinstance(r, Exception)]
+        # Flatten results (each task returns a list of evaluations)
+        all_evaluations = []
+        failed_evaluators = []
 
-        if self.valves.DEBUG_MODE and len(evaluations) < len(tasks):
-            print(f"[Council] Completed {len(evaluations)}/{len(tasks)} evaluations successfully")
-            if none_results:
-                print(f"[Council] {len(none_results)} evaluation(s) returned None (likely timeout or parsing failure)")
-            if exceptions:
-                print(f"[Council] {len(exceptions)} evaluation(s) raised exceptions:")
-                for exc in exceptions[:5]:  # Show first 5
-                    print(f"  - {type(exc).__name__}: {str(exc)[:100]}")
-        elif self.valves.DEBUG_MODE:
-            print(f"[Council] Completed {len(evaluations)}/{len(tasks)} evaluations successfully")
+        for i, result in enumerate(results):
+            if isinstance(result, Exception):
+                if self.valves.DEBUG_MODE:
+                    evaluator = self.evaluation_models[i]
+                    print(f"[Council] {evaluator}: Bulk evaluation raised exception: {type(result).__name__}: {str(result)[:100]}")
+                    failed_evaluators.append(evaluator)
+            elif isinstance(result, list):
+                all_evaluations.extend(result)
+                if self.valves.DEBUG_MODE and len(result) > 0:
+                    evaluator = self.evaluation_models[i]
+                    print(f"[Council] {evaluator}: Successfully evaluated {len(result)} responses")
+            elif result is None or len(result) == 0:
+                if self.valves.DEBUG_MODE:
+                    evaluator = self.evaluation_models[i]
+                    print(f"[Council] {evaluator}: Bulk evaluation returned no results")
+                    failed_evaluators.append(evaluator)
 
-        return evaluations
+        expected_count = len(responses) * len(self.evaluation_models)
+        if self.valves.DEBUG_MODE:
+            print(f"[Council] Completed {len(all_evaluations)}/{expected_count} total evaluations")
+            if failed_evaluators:
+                print(f"[Council] Failed evaluators: {', '.join(failed_evaluators)}")
+
+        return all_evaluations
 
     def _aggregate_scores(
         self,

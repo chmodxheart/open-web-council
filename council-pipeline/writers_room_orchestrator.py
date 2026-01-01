@@ -47,6 +47,15 @@ from schemas import (
     CreativeWritingScores,
     AggregatedScores,
     SynthesisInput,
+    StandardEvaluationResponse,
+    CreativeEvaluationResponse,
+    SingleStandardEvaluation,
+    SingleCreativeEvaluation,
+    BulkStandardEvaluationResponse,
+    BulkCreativeEvaluationResponse,
+    ResponseVariant,
+    MultipleResponses,
+    get_structured_output_format,
     create_council_metadata,
     extract_council_metadata,
     inject_council_metadata,
@@ -74,23 +83,23 @@ class Pipe:
         # ============================================================
         MODELS_TO_QUERY: str = Field(
             default="gpt-5.1,anthropic/claude-sonnet-4.5,groq.moonshotai/kimi-k2-instruct",
-            description="Comma-separated list of model IDs to query for initial responses"
+            description="Comma-separated list of model IDs to query for initial responses (default: gpt-5.1,anthropic/claude-sonnet-4.5,groq.moonshotai/kimi-k2-instruct)"
         )
 
         EVALUATION_MODELS: str = Field(
             default="",
-            description="Comma-separated list of model IDs to use for evaluation (leave empty to use same models as MODELS_TO_QUERY)"
+            description="Comma-separated list of model IDs to use for evaluation, leave empty to use same models as MODELS_TO_QUERY (default: empty)"
         )
 
         LEAD_SYNTHESIZER: str = Field(
             default="auto",
-            description="Lead model for synthesis ('auto' for highest-scoring, or specific model ID)"
+            description="Lead model for synthesis: 'auto' for highest-scoring, or specific model ID (default: auto)"
         )
 
         MIN_MODELS_REQUIRED: int = Field(
             default=3,
             ge=2,
-            description="Minimum number of successful model responses required (recommended: 3-5, not total models configured)"
+            description="Minimum number of successful model responses required, recommended 3-5, not total models configured (default: 3)"
         )
 
         # ============================================================
@@ -108,20 +117,20 @@ class Pipe:
             default=0.7,
             ge=0.0,
             le=2.0,
-            description="Default temperature for all models"
+            description="Default temperature for all models (default: 0.7)"
         )
 
         DEFAULT_TOP_P: float = Field(
             default=1.0,
             ge=0.0,
             le=1.0,
-            description="Default top_p (nucleus sampling)"
+            description="Default top_p nucleus sampling (default: 1.0)"
         )
 
         DEFAULT_MAX_TOKENS: int = Field(
             default=0,
             ge=0,
-            description="Default max tokens to generate (0 = no limit)"
+            description="Default max tokens to generate, 0 = no limit (default: 0)"
         )
 
         # ============================================================
@@ -131,55 +140,55 @@ class Pipe:
             default=0.25,
             ge=0.0,
             le=1.0,
-            description="Weight for voice authenticity (human-like, avoids LLM artifacts)"
+            description="Weight for voice authenticity: human-like, avoids LLM artifacts (default: 0.25)"
         )
 
         EVALUATION_WEIGHT_EMOTIONAL_RESONANCE: float = Field(
             default=0.20,
             ge=0.0,
             le=1.0,
-            description="Weight for emotional resonance (show don't tell, evokes feelings)"
+            description="Weight for emotional resonance: show don't tell, evokes feelings (default: 0.20)"
         )
 
         EVALUATION_WEIGHT_ORIGINALITY: float = Field(
             default=0.20,
             ge=0.0,
             le=1.0,
-            description="Weight for originality & risk-taking (avoids clichés, fresh metaphors)"
+            description="Weight for originality and risk-taking: avoids clichés, fresh metaphors (default: 0.20)"
         )
 
         EVALUATION_WEIGHT_STYLE_CONSISTENCY: float = Field(
             default=0.15,
             ge=0.0,
             le=1.0,
-            description="Weight for style consistency (matches project brief/voice bible)"
+            description="Weight for style consistency: matches project brief or voice bible (default: 0.15)"
         )
 
         EVALUATION_WEIGHT_NARRATIVE_COHERENCE: float = Field(
             default=0.15,
             ge=0.0,
             le=1.0,
-            description="Weight for narrative coherence (clear through-line, good pacing)"
+            description="Weight for narrative coherence: clear through-line, good pacing (default: 0.15)"
         )
 
         EVALUATION_WEIGHT_LLM_ARTIFACT_AVOIDANCE: float = Field(
             default=0.05,
             ge=0.0,
             le=1.0,
-            description="Weight for LLM artifact avoidance (penalizes AI-sounding phrases)"
+            description="Weight for LLM artifact avoidance: penalizes AI-sounding phrases (default: 0.05)"
         )
 
         TOP_N_FOR_SYNTHESIS: int = Field(
             default=0,
             ge=0,
-            description="Number of top-ranked responses to use for synthesis (0 = all responses, regardless of score)"
+            description="Number of top-ranked responses to use for synthesis, 0 = all responses regardless of score (default: 0)"
         )
 
         MIN_SCORE_FOR_SYNTHESIS: float = Field(
             default=0.0,
             ge=0.0,
             le=10.0,
-            description="Minimum score threshold for synthesis (0 = include all, even low-scoring responses). Responses below this score are excluded from synthesis input."
+            description="Minimum score threshold for synthesis, 0 = include all even low-scoring responses, responses below this are excluded (default: 0.0)"
         )
 
         # ============================================================
@@ -188,20 +197,20 @@ class Pipe:
         TIMEOUT_SECONDS: int = Field(
             default=60,
             ge=5,
-            le=360,
-            description="Timeout for individual model queries (seconds)"
+            le=600,
+            description="Timeout for individual model queries in seconds (default: 60)"
         )
 
         EVAL_TIMEOUT_SECONDS: int = Field(
             default=90,
             ge=5,
-            le=360,
-            description="Timeout for evaluation queries (seconds). Often needs to be higher due to rate limits."
+            le=600,
+            description="Timeout for evaluation queries in seconds, often needs to be higher due to rate limits (default: 90)"
         )
 
         ENABLE_PARALLEL_REQUESTS: bool = Field(
             default=True,
-            description="Enable parallel model queries (recommended)"
+            description="Enable parallel model queries, recommended for performance (default: true)"
         )
 
         # ============================================================
@@ -209,7 +218,7 @@ class Pipe:
         # ============================================================
         SYNTHESIS_MODE: str = Field(
             default="self_revision",
-            description="Synthesis mode: 'self_revision' (each model revises its own work based on critiques), 'full' (synthesize from all responses), 'highest_rated' (return only the top-scoring response), 'none' (show responses and scores only, no synthesis)"
+            description="Synthesis mode: 'self_revision' (each model revises its own work), 'full' (synthesize from all), 'highest_rated' (return top-scoring only), 'none' (show responses and scores only) (default: self_revision)"
         )
 
         # ============================================================
@@ -217,17 +226,17 @@ class Pipe:
         # ============================================================
         SHOW_TOKEN_USAGE: bool = Field(
             default=True,
-            description="Show detailed token usage breakdown per model (initial + evaluation)"
+            description="Show detailed token usage breakdown per model for initial and evaluation queries (default: true)"
         )
 
         MODEL_COSTS_JSON: str = Field(
             default="{}",
-            description='Per-model costs as JSON: {"gpt-4": {"input": 0.03, "output": 0.06}, "claude-3-opus": {"input": 0.015, "output": 0.075}}. Costs are per 1M tokens.'
+            description='Per-model costs as JSON: {"gpt-4": {"input": 0.03, "output": 0.06}, "claude-3-opus": {"input": 0.015, "output": 0.075}}, costs are per 1M tokens (default: {})'
         )
 
         SHOW_COST_ESTIMATE: bool = Field(
             default=False,
-            description="Show estimated cost breakdown (requires MODEL_COSTS_JSON to be configured)"
+            description="Show estimated cost breakdown, requires MODEL_COSTS_JSON to be configured (default: false)"
         )
 
         # ============================================================
@@ -235,27 +244,27 @@ class Pipe:
         # ============================================================
         SHOW_EVALUATION_SCORES: bool = Field(
             default=True,
-            description="Include evaluation scores summary in output"
+            description="Include evaluation scores summary in output (default: true)"
         )
 
         SHOW_INDIVIDUAL_RESPONSES: bool = Field(
-            default=False,
-            description="Include all individual model responses in output (can be very large!)"
+            default=True,
+            description="Include all individual model responses in output, can be very large (default: true)"
         )
 
         SHOW_REASONING: bool = Field(
-            default=False,
-            description="Include detailed evaluation reasoning in output (can be very large!)"
+            default=True,
+            description="Include detailed evaluation reasoning in output, can be very large (default: true)"
         )
 
         SHOW_PROGRESS: bool = Field(
             default=True,
-            description="Stream progress updates during execution (queries, evaluations, synthesis phases)"
+            description="Stream progress updates during execution: queries, evaluations, synthesis phases (default: true)"
         )
 
         ENABLE_STREAMING: bool = Field(
             default=True,
-            description="Stream output progressively as Council works (recommended for transparency)"
+            description="Stream output progressively as Writer's Room works, recommended for transparency (default: true)"
         )
 
         # ============================================================
@@ -265,67 +274,67 @@ class Pipe:
         # Initial Query Techniques
         QUERY_USE_HERMENEUTIC_CIRCLE: bool = Field(
             default=True,
-            description="Apply hermeneutic circle (parts/whole interplay) in initial responses"
+            description="Apply hermeneutic circle approach (parts/whole interplay) in initial responses (default: true)"
         )
 
         QUERY_USE_CHAIN_OF_THOUGHT: bool = Field(
             default=False,
-            description="Request step-by-step reasoning in initial responses"
+            description="Request step-by-step reasoning in initial responses (default: false)"
         )
 
         QUERY_USE_VERBALIZED_SAMPLING: bool = Field(
             default=False,
-            description="Request models to generate multiple response variants with probability scores"
+            description="Request models to generate multiple response variants with probability scores (default: false)"
         )
 
         VERBALIZED_SAMPLING_COUNT: int = Field(
             default=5,
             ge=1,
             le=10,
-            description="Number of response variants when QUERY_USE_VERBALIZED_SAMPLING enabled"
+            description="Number of response variants when QUERY_USE_VERBALIZED_SAMPLING enabled (default: 5)"
         )
 
         VERBALIZED_SAMPLING_SELECTION_STRATEGY: str = Field(
             default="best_per_model",
-            description="Selection strategy: 'best_per_model' (keep top from each model) or 'top_n_overall' (keep top N regardless of source)"
+            description="Selection strategy: 'best_per_model' (keep top from each model) or 'top_n_overall' (keep top N regardless of source) (default: best_per_model)"
         )
 
         VERBALIZED_SAMPLING_TOP_N: int = Field(
             default=5,
             ge=1,
-            description="Top N responses to keep when using 'top_n_overall' selection strategy"
+            description="Top N responses to keep when using 'top_n_overall' selection strategy (default: 5)"
         )
 
         # Evaluation Techniques
         EVAL_USE_HERMENEUTIC_CIRCLE: bool = Field(
             default=True,
-            description="Apply hermeneutic circle in evaluations"
+            description="Apply hermeneutic circle approach in evaluations (default: true)"
         )
 
         EVAL_USE_VERBALIZED_SAMPLING: bool = Field(
             default=True,
-            description="Request detailed reasoning process in evaluations"
+            description="Request detailed reasoning process in evaluations (default: true)"
         )
 
         EVAL_USE_SOCRATIC_QUESTIONING: bool = Field(
             default=True,
-            description="Probe assumptions, gaps, and weaknesses in evaluations"
+            description="Probe assumptions, gaps, and weaknesses in evaluations (default: true)"
         )
 
         EVAL_USE_ADVERSARIAL_STANCE: bool = Field(
             default=True,
-            description="Actively look for flaws and edge cases in evaluations"
+            description="Actively look for flaws and edge cases in evaluations (default: true)"
         )
 
         EVAL_USE_CONSTITUTIONAL_PRINCIPLES: bool = Field(
             default=True,
-            description="Justify scores against explicit quality principles in evaluations"
+            description="Justify scores against explicit quality principles in evaluations (default: true)"
         )
 
         # Synthesis Techniques
         SYNTH_USE_META_COGNITIVE: bool = Field(
             default=True,
-            description="Reflect on uncertainty and confidence levels in synthesis"
+            description="Reflect on uncertainty and confidence levels in synthesis (default: true)"
         )
 
         # ============================================================
@@ -341,61 +350,11 @@ class Pipe:
         # See _build_synthesis_prompt() method for the actual template construction.
 
         # ============================================================
-        # Score Parsing Patterns - Creative Writing Criteria
-        # ============================================================
-        VOICE_AUTHENTICITY_PATTERN: str = Field(
-            default=r"VOICE[_\s]*AUTHENTICITY\s*:?\s*(\d+(?:\.\d+)?)",
-            description="Regex pattern to extract voice authenticity score (flexible format)"
-        )
-
-        EMOTIONAL_RESONANCE_PATTERN: str = Field(
-            default=r"EMOTIONAL[_\s]*RESONANCE\s*:?\s*(\d+(?:\.\d+)?)",
-            description="Regex pattern to extract emotional resonance score (flexible format)"
-        )
-
-        ORIGINALITY_PATTERN: str = Field(
-            default=r"ORIGINALITY\s*:?\s*(\d+(?:\.\d+)?)",
-            description="Regex pattern to extract originality score (flexible format)"
-        )
-
-        STYLE_CONSISTENCY_PATTERN: str = Field(
-            default=r"STYLE[_\s]*CONSISTENCY\s*:?\s*(\d+(?:\.\d+)?)",
-            description="Regex pattern to extract style consistency score (flexible format)"
-        )
-
-        NARRATIVE_COHERENCE_PATTERN: str = Field(
-            default=r"NARRATIVE[_\s]*COHERENCE\s*:?\s*(\d+(?:\.\d+)?)",
-            description="Regex pattern to extract narrative coherence score (flexible format)"
-        )
-
-        LLM_ARTIFACT_AVOIDANCE_PATTERN: str = Field(
-            default=r"LLM[_\s]*ARTIFACT[_\s]*AVOIDANCE\s*:?\s*(\d+(?:\.\d+)?)",
-            description="Regex pattern to extract LLM artifact avoidance score (flexible format)"
-        )
-
-        REASONING_PATTERN: str = Field(
-            default=r"REASONING:\s*(.+)",
-            description="Regex pattern to extract reasoning text (captures everything after REASONING:)"
-        )
-
-        DEFAULT_SCORE: float = Field(
-            default=5.0,
-            ge=0.0,
-            le=10.0,
-            description="Default score if parsing fails"
-        )
-
-        STRICT_SCORE_PARSING: bool = Field(
-            default=False,
-            description="If True, reject evaluations with missing scores. If False, use defaults."
-        )
-
-        # ============================================================
         # Debug Configuration
         # ============================================================
         DEBUG_MODE: bool = Field(
             default=False,
-            description="Enable verbose debug logging"
+            description="Enable verbose debug logging (default: false)"
         )
 
     def __init__(self):
@@ -1383,18 +1342,23 @@ class Pipe:
             instructions.append(f"\n**Creative Exploration (Multiple Variants):**")
             instructions.append(
                 f"Generate exactly {count} different creative approaches to this request. "
-                f"For each approach, provide a complete response within a <response> tag containing:\n"
-                f"  - <text>Your full creative content</text>\n"
-                f"  - <probability>A decimal between 0.0-0.10 representing how unusual/risky this approach is</probability>\n\n"
+                f"Your response will be validated as JSON, so ensure it's properly formatted.\n\n"
                 f"Sample from the tails of the distribution - avoid safe, predictable responses. "
                 f"Each variant should explore different: imagery, tone, metaphors, narrative choices, stylistic risks.\n\n"
-                f"Format example:\n"
+                f"The probability field (0.0-1.0) represents how unusual/risky each approach is.\n\n"
+                f"**IMPORTANT**: For each variant's 'text' field, include your COMPLETE creative process:\n"
+                f"- Any technique selection or constraint-building steps\n"
+                f"- Your reasoning about creative choices\n"
+                f"- The final creative output\n"
+                f"If you use a step-by-step approach (like technique audit, prompt building, etc.), include ALL steps in the 'text' field.\n\n"
+                f"Note: Structured output format will be enforced by the API.\n\n"
+                f"Deprecated format example (for reference only - structured output handles formatting):\n"
                 f"<response>\n"
-                f"  <text>First creative variant here...</text>\n"
+                f"  <text>[ALL your creative process and reasoning here, followed by the final creative variant]</text>\n"
                 f"  <probability>0.08</probability>\n"
                 f"</response>\n"
                 f"<response>\n"
-                f"  <text>Second creative variant here...</text>\n"
+                f"  <text>[ALL your creative process and reasoning here, followed by the second creative variant]</text>\n"
                 f"  <probability>0.06</probability>\n"
                 f"</response>\n"
                 f"...and so on for all {count} variants."
@@ -1855,6 +1819,14 @@ class Pipe:
                 "top_p": params.top_p,
             }
 
+            # Add structured output format for verbalized sampling
+            if self.valves.QUERY_USE_VERBALIZED_SAMPLING:
+                payload["response_format"] = get_structured_output_format(
+                    MultipleResponses,
+                    "verbalized_sampling_variants",
+                    strict=False  # Disable strict mode - optional fields cause issues with some providers
+                )
+
             # Only set max_tokens if > 0 (0 means no limit)
             if params.max_tokens > 0:
                 payload["max_tokens"] = params.max_tokens
@@ -1984,37 +1956,46 @@ class Pipe:
         if not self.valves.QUERY_USE_VERBALIZED_SAMPLING:
             return [raw_response]
 
-        # Try to parse multiple responses
-        parsed_variants = self._parse_verbalized_sampling_responses(raw_response.content)
+        # Parse structured JSON response with multiple variants
+        try:
+            multi_response = MultipleResponses.model_validate_json(raw_response.content)
 
-        # If parsing failed or returned no variants, fall back to single response
-        if not parsed_variants:
             if self.valves.DEBUG_MODE:
-                print(f"[Writer's Room] {model_id}: Verbalized sampling enabled but no <response> tags found. Falling back to single response.")
+                print(f"[Writer's Room] {model_id}: Parsed {len(multi_response.variants)} variants from structured output")
+
+            # Create ModelResponse for each variant
+            import secrets
+            responses = []
+
+            # Distribute tokens across variants (total usage / number of variants)
+            # This represents the approximate cost per variant
+            tokens_per_variant = None
+            if raw_response.tokens_used:
+                tokens_per_variant = raw_response.tokens_used // len(multi_response.variants)
+
+            for idx, variant in enumerate(multi_response.variants, 1):
+                variant_response = ModelResponse(
+                    model_id=model_id,
+                    content=variant.text,
+                    success=True,
+                    response_index=idx,
+                    probability=variant.probability,
+                    tokens_used=tokens_per_variant,
+                    latency_ms=raw_response.latency_ms / len(multi_response.variants) if raw_response.latency_ms else None,
+                    parameters=raw_response.parameters,
+                    anonymous_id=f"response_{secrets.token_hex(4)}"  # Unique ID for each variant
+                )
+                responses.append(variant_response)
+
+            return responses
+
+        except Exception as parse_error:
+            if self.valves.DEBUG_MODE:
+                print(f"[Writer's Room] {model_id}: Failed to parse structured variants: {parse_error}")
+                print(f"[Writer's Room] {model_id}: Falling back to single response")
+
+            # Fall back to single response on parsing failure
             return [raw_response]
-
-        # Create ModelResponse for each variant
-        import secrets
-        responses = []
-
-        for variant in parsed_variants:
-            variant_response = ModelResponse(
-                model_id=model_id,
-                content=variant["text"],  # Clean text without XML tags
-                success=True,
-                response_index=variant["index"],
-                probability=variant["probability"],
-                tokens_used=None,  # Will be distributed across variants in token tracking
-                latency_ms=raw_response.latency_ms / len(parsed_variants) if raw_response.latency_ms else None,  # Approximate per-variant latency
-                parameters=raw_response.parameters,
-                anonymous_id=f"response_{secrets.token_hex(4)}"  # Unique ID for each variant
-            )
-            responses.append(variant_response)
-
-        if self.valves.DEBUG_MODE:
-            print(f"[Writer's Room] {model_id}: Generated {len(responses)} variants via verbalized sampling")
-
-        return responses
 
     def _create_anonymous_mapping(
         self,
@@ -2032,158 +2013,172 @@ class Pipe:
 
         return mapping
 
-    def _parse_verbalized_sampling_responses(self, raw_text: str) -> List[Dict[str, Any]]:
+    def _build_bulk_evaluation_prompt(self, responses: List[ModelResponse]) -> str:
+        """Build bulk evaluation prompt with all anonymous responses"""
+        sections = []
+
+        # Opening
+        sections.append("You are an experienced fiction editor participating in a Writer's Room peer review.")
+        sections.append(f"Your task is to evaluate {len(responses)} anonymous creative writing submissions.")
+        sections.append("Compare them directly, calibrate your scores relative to each other, and be tough on AI-sounding phrases.")
+        sections.append("")
+
+        # Add same prompting techniques as single evaluation
+        if self.valves.EVAL_USE_HERMENEUTIC_CIRCLE:
+            sections.append("**Hermeneutic Circle Approach:**")
+            sections.append("For each piece, evaluate how specific details contribute to the whole emotional arc.")
+            sections.append("")
+
+        if self.valves.EVAL_USE_VERBALIZED_SAMPLING:
+            sections.append("**Show Your Thinking:**")
+            sections.append("Reveal your editorial thought process for each piece.")
+            sections.append("")
+
+        if self.valves.EVAL_USE_SOCRATIC_QUESTIONING:
+            sections.append("**Socratic Examination:**")
+            sections.append("For each piece, probe: Does it SHOW or TELL? Are images concrete? Does dialogue sound real?")
+            sections.append("")
+
+        if self.valves.EVAL_USE_ADVERSARIAL_STANCE:
+            sections.append("**Critical Analysis:**")
+            sections.append("Actively hunt for AI artifacts, clichés, and weak writing in each piece.")
+            sections.append("")
+
+        # List all responses with their IDs
+        sections.append("**Submissions to Evaluate:**")
+        sections.append("")
+        for i, response in enumerate(responses, 1):
+            sections.append(f"--- Response {response.anonymous_id} ---")
+            sections.append(response.content)
+            sections.append("")
+
+        sections.append("**Your Task:**")
+        sections.append("Evaluate each response using structured output format.")
+        sections.append("You'll return a JSON object with one evaluation per response.")
+        sections.append("Include the response_id, scores (0-10 for each criterion), and detailed reasoning.")
+
+        return "\n".join(sections)
+
+    async def _query_for_bulk_evaluation(
+        self,
+        evaluator_model_id: str,
+        target_responses: List[ModelResponse],
+        params: ModelParameters,
+        request: Any,
+        user: Optional[dict],
+        metadata: CouncilMetadata,
+    ) -> List[Evaluation]:
         """
-        Extract multiple <response> blocks from verbalized sampling output.
+        Query a model to evaluate ALL anonymous responses in one API call
 
-        Expected format:
-        <response>
-          <text>The actual creative content here...</text>
-          <probability>0.08</probability>
-        </response>
-        <response>
-          <text>Another variant...</text>
-          <probability>0.07</probability>
-        </response>
-
-        Returns:
-            List of dicts with 'text', 'probability', and 'index' keys.
-            Empty list if no valid responses found (triggers fallback).
-        """
-        if self.valves.DEBUG_MODE:
-            print(f"[Writer's Room] Parsing verbalized sampling responses...")
-
-        response_pattern = r'<response>(.*?)</response>'
-        responses = []
-
-        for idx, match in enumerate(re.finditer(response_pattern, raw_text, re.DOTALL | re.IGNORECASE), 1):
-            response_block = match.group(1)
-
-            # Extract text
-            text_match = re.search(r'<text>(.*?)</text>', response_block, re.DOTALL | re.IGNORECASE)
-            if not text_match:
-                if self.valves.DEBUG_MODE:
-                    print(f"[Writer's Room] Response {idx}: No <text> tag found, skipping")
-                continue
-
-            text = text_match.group(1).strip()
-            if not text:
-                if self.valves.DEBUG_MODE:
-                    print(f"[Writer's Room] Response {idx}: Empty text, skipping")
-                continue
-
-            # Extract probability (optional)
-            probability = None
-            prob_match = re.search(r'<probability>(.*?)</probability>', response_block, re.DOTALL | re.IGNORECASE)
-            if prob_match:
-                try:
-                    probability = float(prob_match.group(1).strip())
-                    probability = max(0.0, min(1.0, probability))  # Clamp to [0, 1]
-                except (ValueError, TypeError):
-                    if self.valves.DEBUG_MODE:
-                        print(f"[Writer's Room] Response {idx}: Invalid probability value, setting to None")
-
-            responses.append({
-                "text": text,
-                "probability": probability,
-                "index": idx
-            })
-
-        if self.valves.DEBUG_MODE:
-            print(f"[Writer's Room] Parsed {len(responses)} response variants")
-
-        return responses
-
-    def _parse_scores(self, text: str) -> Optional[CreativeWritingScores]:
-        """
-        Parse creative writing evaluation scores from text using regex patterns from Valves
-
-        Returns CreativeWritingScores or None if strict mode and scores missing
-        """
-        # Extract individual creative writing scores
-        voice = self._extract_single_score(text, self.valves.VOICE_AUTHENTICITY_PATTERN, "voice_authenticity")
-        emotion = self._extract_single_score(text, self.valves.EMOTIONAL_RESONANCE_PATTERN, "emotional_resonance")
-        original = self._extract_single_score(text, self.valves.ORIGINALITY_PATTERN, "originality")
-        style = self._extract_single_score(text, self.valves.STYLE_CONSISTENCY_PATTERN, "style_consistency")
-        coherence = self._extract_single_score(text, self.valves.NARRATIVE_COHERENCE_PATTERN, "narrative_coherence")
-        no_artifacts = self._extract_single_score(text, self.valves.LLM_ARTIFACT_AVOIDANCE_PATTERN, "llm_artifact_avoidance")
-
-        # Check if any scores are None
-        if self.valves.STRICT_SCORE_PARSING:
-            if None in [voice, emotion, original, style, coherence, no_artifacts]:
-                if self.valves.DEBUG_MODE:
-                    print("[Writer's Room] Strict mode: Some scores missing, rejecting")
-                return None
-
-        # Use defaults for missing scores in non-strict mode
-        voice = voice if voice is not None else self.valves.DEFAULT_SCORE
-        emotion = emotion if emotion is not None else self.valves.DEFAULT_SCORE
-        original = original if original is not None else self.valves.DEFAULT_SCORE
-        style = style if style is not None else self.valves.DEFAULT_SCORE
-        coherence = coherence if coherence is not None else self.valves.DEFAULT_SCORE
-        no_artifacts = no_artifacts if no_artifacts is not None else self.valves.DEFAULT_SCORE
-
-        # Clamp scores to valid range (0-10)
-        voice = max(0.0, min(10.0, voice))
-        emotion = max(0.0, min(10.0, emotion))
-        original = max(0.0, min(10.0, original))
-        style = max(0.0, min(10.0, style))
-        coherence = max(0.0, min(10.0, coherence))
-        no_artifacts = max(0.0, min(10.0, no_artifacts))
-
-        # Return proper CreativeWritingScores with all 6 fields
-        return CreativeWritingScores(
-            voice_authenticity=voice,
-            emotional_resonance=emotion,
-            originality=original,
-            style_consistency=style,
-            narrative_coherence=coherence,
-            llm_artifact_avoidance=no_artifacts
-        )
-
-    def _extract_single_score(self, text: str, pattern: str, score_name: str) -> Optional[float]:
-        """
-        Extract a single score using a regex pattern
-
-        Returns extracted score as float, or None if not found
+        Returns list of Evaluation objects (one per response)
         """
         try:
-            match = re.search(pattern, text, re.IGNORECASE | re.DOTALL)
-            if match:
-                score_str = match.group(1).strip()
-                score = float(score_str)
+            # Get base URL and auth token
+            base_url = f"{request.url.scheme}://{request.url.netloc}" if request else "http://localhost:3000"
+            auth_token = self._extract_token(request)
 
+            if not auth_token:
                 if self.valves.DEBUG_MODE:
-                    print(f"[Council] {score_name}: {score}")
+                    print(f"[Writer's Room] No auth token for bulk evaluation")
+                return []
 
-                return score
-            else:
-                if self.valves.DEBUG_MODE:
-                    print(f"[Council] {score_name}: not found")
-                return None
+            # Build bulk evaluation prompt with all responses
+            evaluation_prompt = self._build_bulk_evaluation_prompt(target_responses)
+
+            # Build request payload with structured output
+            payload = {
+                "model": evaluator_model_id,
+                "messages": [
+                    {
+                        "role": "user",
+                        "content": evaluation_prompt
+                    }
+                ],
+                "stream": False,
+                "temperature": params.temperature,
+                "top_p": params.top_p,
+                "response_format": get_structured_output_format(
+                    BulkCreativeEvaluationResponse,
+                    "bulk_creative_evaluation"
+                )
+            }
+
+            # Only set max_tokens if > 0 (0 means no limit)
+            if params.max_tokens > 0:
+                payload["max_tokens"] = params.max_tokens
+
+            # Make API call
+            async with aiohttp.ClientSession() as session:
+                async with session.post(
+                    f"{base_url}/api/chat/completions",
+                    headers={
+                        "Authorization": f"Bearer {auth_token}",
+                        "Content-Type": "application/json"
+                    },
+                    json=payload,
+                    timeout=aiohttp.ClientTimeout(total=self.valves.EVAL_TIMEOUT_SECONDS)
+                ) as response:
+
+                    if response.status == 200:
+                        data = await response.json()
+
+                        # Safely extract content from response
+                        if "choices" in data and len(data["choices"]) > 0:
+                            choice = data["choices"][0]
+                            evaluation_json = choice.get("message", {}).get("content", "")
+                            finish_reason = choice.get("finish_reason", "unknown")
+
+                            # Warn if evaluation response was truncated
+                            if finish_reason not in ["stop", "end_turn", None]:
+                                if self.valves.DEBUG_MODE:
+                                    print(f"[Writer's Room] {evaluator_model_id}: Bulk evaluation stopped with finish_reason='{finish_reason}' (may be incomplete)")
+                        else:
+                            if self.valves.DEBUG_MODE:
+                                print(f"[Writer's Room] Invalid bulk evaluation response format from {evaluator_model_id}")
+                            return []
+
+                        # Track evaluation tokens
+                        usage = data.get("usage", {})
+                        input_tokens = usage.get("prompt_tokens", 0)
+                        output_tokens = usage.get("completion_tokens", 0)
+                        self._track_tokens(evaluator_model_id, "evaluation", input_tokens, output_tokens)
+
+                        # Parse structured JSON response
+                        try:
+                            bulk_response = BulkCreativeEvaluationResponse.model_validate_json(evaluation_json)
+
+                            # Convert to individual Evaluation objects
+                            evaluations = []
+                            for single_eval in bulk_response.evaluations:
+                                evaluation = Evaluation(
+                                    evaluator_model_id=evaluator_model_id,
+                                    target_anonymous_id=single_eval.response_id,
+                                    scores=single_eval.scores,
+                                    reasoning=single_eval.reasoning,
+                                    raw_response=evaluation_json
+                                )
+                                evaluations.append(evaluation)
+
+                            if self.valves.DEBUG_MODE:
+                                print(f"[Writer's Room] {evaluator_model_id}: Bulk evaluated {len(evaluations)} responses")
+
+                            return evaluations
+
+                        except Exception as parse_error:
+                            if self.valves.DEBUG_MODE:
+                                print(f"[Writer's Room] Failed to parse bulk structured response from {evaluator_model_id}: {parse_error}")
+                                print(f"[Writer's Room] Raw response: {evaluation_json}")
+                            return []
+                    else:
+                        if self.valves.DEBUG_MODE:
+                            print(f"[Writer's Room] Bulk evaluation query failed: HTTP {response.status}")
+                        return []
 
         except Exception as e:
             if self.valves.DEBUG_MODE:
-                print(f"[Council] Error extracting {score_name}: {e}")
-            return None
-
-    def _extract_reasoning(self, text: str) -> str:
-        """
-        Extract reasoning text using regex pattern from Valves
-
-        Returns extracted reasoning, or empty string if not found
-        """
-        try:
-            match = re.search(self.valves.REASONING_PATTERN, text, re.IGNORECASE | re.DOTALL)
-            if match:
-                reasoning = match.group(1).strip()
-                return reasoning
-            return ""
-
-        except Exception as e:
-            if self.valves.DEBUG_MODE:
-                print(f"[Council] Error extracting reasoning: {e}")
-            return ""
+                print(f"[Writer's Room] Error in bulk evaluation query: {e}")
+            return []
 
     async def _query_for_evaluation(
         self,
@@ -2213,7 +2208,7 @@ class Pipe:
             # Build evaluation prompt dynamically based on enabled techniques
             evaluation_prompt = self._build_evaluation_prompt(target_response.content)
 
-            # Build request payload
+            # Build request payload with structured output
             payload = {
                 "model": evaluator_model_id,
                 "messages": [
@@ -2225,6 +2220,10 @@ class Pipe:
                 "stream": False,
                 "temperature": params.temperature,
                 "top_p": params.top_p,
+                "response_format": get_structured_output_format(
+                    CreativeEvaluationResponse,
+                    "creative_evaluation"
+                )
             }
 
             # Only set max_tokens if > 0 (0 means no limit)
@@ -2249,7 +2248,7 @@ class Pipe:
                         # Safely extract content from response
                         if "choices" in data and len(data["choices"]) > 0:
                             choice = data["choices"][0]
-                            evaluation_text = choice.get("message", {}).get("content", "")
+                            evaluation_json = choice.get("message", {}).get("content", "")
                             finish_reason = choice.get("finish_reason", "unknown")
 
                             # Warn if evaluation response was truncated
@@ -2258,7 +2257,7 @@ class Pipe:
                                     print(f"[Writer's Room] {evaluator_model_id}: Evaluation stopped with finish_reason='{finish_reason}' (may be incomplete)")
                         else:
                             if self.valves.DEBUG_MODE:
-                                print(f"[Council] Invalid evaluation response format from {evaluator_model_id}")
+                                print(f"[Writer's Room] Invalid evaluation response format from {evaluator_model_id}")
                             return None
 
                         # Track evaluation tokens
@@ -2267,24 +2266,23 @@ class Pipe:
                         output_tokens = usage.get("completion_tokens", 0)
                         self._track_tokens(evaluator_model_id, "evaluation", input_tokens, output_tokens)
 
-                        # Parse scores from the evaluation text
-                        scores = self._parse_scores(evaluation_text)
-
-                        if scores:
-                            # Extract reasoning
-                            reasoning = self._extract_reasoning(evaluation_text)
+                        # Parse structured JSON response
+                        try:
+                            eval_response = CreativeEvaluationResponse.model_validate_json(evaluation_json)
 
                             evaluation = Evaluation(
                                 evaluator_model_id=evaluator_model_id,
                                 target_anonymous_id=target_response.anonymous_id,
-                                scores=scores,
-                                reasoning=reasoning
+                                scores=eval_response.scores,
+                                reasoning=eval_response.reasoning,
+                                raw_response=evaluation_json
                             )
 
                             return evaluation
-                        else:
+                        except Exception as parse_error:
                             if self.valves.DEBUG_MODE:
-                                print(f"[Council] Failed to parse scores from {evaluator_model_id}")
+                                print(f"[Writer's Room] Failed to parse structured response from {evaluator_model_id}: {parse_error}")
+                                print(f"[Writer's Room] Raw response: {evaluation_json}")
                             return None
                     else:
                         if self.valves.DEBUG_MODE:
@@ -2305,56 +2303,66 @@ class Pipe:
         metadata: CouncilMetadata,
     ) -> List[Evaluation]:
         """
-        Distribute anonymous responses to evaluation models for scoring
+        Distribute anonymous responses to evaluation models for scoring (BULK MODE)
 
-        Each evaluation model evaluates ALL anonymous responses.
-        Uses self.evaluation_models which may differ from generation models.
+        Each evaluation model evaluates ALL anonymous responses in ONE API call.
+        This provides better comparative context and is far more efficient.
 
-        All evaluations run in parallel for maximum performance.
+        All evaluators run in parallel for maximum performance.
         """
         # Get model parameters for evaluation queries
         model_params = self._get_model_params()
 
-        # Build list of all evaluation tasks (all independent, can run in parallel)
+        # Build list of bulk evaluation tasks (one per evaluator)
         tasks = []
         for evaluator_model_id in self.evaluation_models:
-            for target in responses:
-                if self.valves.DEBUG_MODE:
-                    print(f"[Council] Queuing: {evaluator_model_id} evaluating {target.anonymous_id}")
+            if self.valves.DEBUG_MODE:
+                print(f"[Writer's Room] Queuing BULK: {evaluator_model_id} evaluating {len(responses)} responses")
 
-                task = self._query_for_evaluation(
-                    evaluator_model_id=evaluator_model_id,
-                    target_response=target,
-                    params=model_params.get(evaluator_model_id, model_params[self.available_models[0]]),
-                    request=request,
-                    user=user,
-                    metadata=metadata
-                )
-                tasks.append(task)
+            task = self._query_for_bulk_evaluation(
+                evaluator_model_id=evaluator_model_id,
+                target_responses=responses,
+                params=model_params.get(evaluator_model_id, model_params[self.available_models[0]]),
+                request=request,
+                user=user,
+                metadata=metadata
+            )
+            tasks.append(task)
 
-        # Execute ALL evaluation queries in parallel
+        # Execute ALL bulk evaluation queries in parallel
         if self.valves.DEBUG_MODE:
-            print(f"[Council] Executing {len(tasks)} evaluations in parallel...")
+            print(f"[Writer's Room] Executing {len(tasks)} BULK evaluations in parallel...")
 
         results = await asyncio.gather(*tasks, return_exceptions=True)
 
-        # Filter out None results and exceptions (failed evaluations)
-        evaluations = [ev for ev in results if ev is not None and not isinstance(ev, Exception)]
-        none_results = [r for r in results if r is None]
-        exceptions = [r for r in results if isinstance(r, Exception)]
+        # Flatten results (each task returns a list of evaluations)
+        all_evaluations = []
+        failed_evaluators = []
 
-        if self.valves.DEBUG_MODE and len(evaluations) < len(tasks):
-            print(f"[Council] Completed {len(evaluations)}/{len(tasks)} evaluations successfully")
-            if none_results:
-                print(f"[Council] {len(none_results)} evaluation(s) returned None (likely timeout or parsing failure)")
-            if exceptions:
-                print(f"[Council] {len(exceptions)} evaluation(s) raised exceptions:")
-                for exc in exceptions[:5]:  # Show first 5
-                    print(f"  - {type(exc).__name__}: {str(exc)[:100]}")
-        elif self.valves.DEBUG_MODE:
-            print(f"[Council] Completed {len(evaluations)}/{len(tasks)} evaluations successfully")
+        for i, result in enumerate(results):
+            if isinstance(result, Exception):
+                if self.valves.DEBUG_MODE:
+                    evaluator = self.evaluation_models[i]
+                    print(f"[Writer's Room] {evaluator}: Bulk evaluation raised exception: {type(result).__name__}: {str(result)[:100]}")
+                    failed_evaluators.append(evaluator)
+            elif isinstance(result, list):
+                all_evaluations.extend(result)
+                if self.valves.DEBUG_MODE and len(result) > 0:
+                    evaluator = self.evaluation_models[i]
+                    print(f"[Writer's Room] {evaluator}: Successfully evaluated {len(result)} responses")
+            elif result is None or len(result) == 0:
+                if self.valves.DEBUG_MODE:
+                    evaluator = self.evaluation_models[i]
+                    print(f"[Writer's Room] {evaluator}: Bulk evaluation returned no results")
+                    failed_evaluators.append(evaluator)
 
-        return evaluations
+        expected_count = len(responses) * len(self.evaluation_models)
+        if self.valves.DEBUG_MODE:
+            print(f"[Writer's Room] Completed {len(all_evaluations)}/{expected_count} total evaluations")
+            if failed_evaluators:
+                print(f"[Writer's Room] Failed evaluators: {', '.join(failed_evaluators)}")
+
+        return all_evaluations
 
     def _aggregate_scores(
         self,

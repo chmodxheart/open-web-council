@@ -34,7 +34,7 @@ import re
 # ============================================================================
 
 
-from pydantic import BaseModel, Field, validator
+from pydantic import BaseModel, Field, validator, ConfigDict
 from typing import Dict, List, Optional, Any, Literal, Union
 from datetime import datetime
 from enum import Enum
@@ -185,9 +185,7 @@ class ModelResponse(BaseModel):
 
     probability: Optional[float] = Field(
         default=None,
-        ge=0.0,
-        le=1.0,
-        description="Probability score from verbalized sampling (0.0-1.0). None for single responses."
+        description="Probability score from verbalized sampling (0.0-1.0). None for single responses. Note: Constraints removed for JSON schema compatibility."
     )
 
     # Additional metadata (e.g., finish_reason, input/output token breakdown)
@@ -689,8 +687,240 @@ class CouncilMetadata(BaseModel):
 
 
 # ============================================================================
+# STRUCTURED OUTPUT SCHEMAS
+# ============================================================================
+
+class StandardEvaluationResponse(BaseModel):
+    """
+    Structured evaluation response for standard Council evaluation
+    Contains EvaluationScores (4 criteria) and reasoning
+    """
+    model_config = ConfigDict(extra='forbid')
+
+    scores: EvaluationScores = Field(
+        ...,
+        description="Evaluation scores: accuracy, clarity, completeness, relevance (0-10)"
+    )
+
+    reasoning: str = Field(
+        ...,
+        description="Detailed reasoning for the scores provided"
+    )
+
+
+class CreativeEvaluationResponse(BaseModel):
+    """
+    Structured evaluation response for Writer's Room evaluation
+    Contains CreativeWritingScores (6 criteria) and reasoning
+    """
+    model_config = ConfigDict(extra='forbid')
+
+    scores: CreativeWritingScores = Field(
+        ...,
+        description="Creative writing scores: voice_authenticity, emotional_resonance, originality, style_consistency, narrative_coherence, llm_artifact_avoidance (0-10)"
+    )
+
+    reasoning: str = Field(
+        ...,
+        description="Detailed reasoning for the scores provided"
+    )
+
+
+class SingleStandardEvaluation(BaseModel):
+    """
+    Single evaluation within a bulk evaluation response (standard criteria)
+    """
+    model_config = ConfigDict(extra='forbid')
+
+    response_id: str = Field(
+        ...,
+        description="The anonymous response ID being evaluated"
+    )
+
+    scores: EvaluationScores = Field(
+        ...,
+        description="Evaluation scores: accuracy, clarity, completeness, relevance (0-10)"
+    )
+
+    reasoning: str = Field(
+        ...,
+        description="Detailed reasoning for the scores provided"
+    )
+
+
+class SingleCreativeEvaluation(BaseModel):
+    """
+    Single evaluation within a bulk evaluation response (creative criteria)
+    """
+    model_config = ConfigDict(extra='forbid')
+
+    response_id: str = Field(
+        ...,
+        description="The anonymous response ID being evaluated"
+    )
+
+    scores: CreativeWritingScores = Field(
+        ...,
+        description="Creative writing scores: voice_authenticity, emotional_resonance, originality, style_consistency, narrative_coherence, llm_artifact_avoidance (0-10)"
+    )
+
+    reasoning: str = Field(
+        ...,
+        description="Detailed reasoning for the scores provided"
+    )
+
+
+class BulkStandardEvaluationResponse(BaseModel):
+    """
+    Bulk evaluation response for Council (standard criteria)
+    Evaluates multiple responses in one API call for better comparative context
+    """
+    model_config = ConfigDict(extra='forbid')
+
+    evaluations: List[SingleStandardEvaluation] = Field(
+        ...,
+        min_length=1,
+        description="List of evaluations, one per response being evaluated"
+    )
+
+
+class BulkCreativeEvaluationResponse(BaseModel):
+    """
+    Bulk evaluation response for Writer's Room (creative criteria)
+    Evaluates multiple responses in one API call for better comparative context
+    """
+    model_config = ConfigDict(extra='forbid')
+
+    evaluations: List[SingleCreativeEvaluation] = Field(
+        ...,
+        min_length=1,
+        description="List of evaluations, one per response being evaluated"
+    )
+
+
+class ResponseVariant(BaseModel):
+    """
+    Single response variant for verbalized sampling
+    """
+    model_config = ConfigDict(extra='forbid')
+
+    text: str = Field(
+        ...,
+        description="The full creative content for this variant"
+    )
+
+    probability: Optional[float] = Field(
+        default=None,
+        description="Probability score (0.0-1.0) representing how unusual/risky this approach is. Note: Constraints removed for JSON schema compatibility."
+    )
+
+
+class MultipleResponses(BaseModel):
+    """
+    Wrapper for multiple response variants from a single model
+    Used for verbalized sampling to get diverse creative outputs
+    """
+    model_config = ConfigDict(extra='forbid')
+
+    variants: List[ResponseVariant] = Field(
+        ...,
+        min_length=1,
+        description="List of response variants, each with text and optional probability"
+    )
+
+
+# ============================================================================
 # HELPER FUNCTIONS
 # ============================================================================
+
+def _sanitize_schema_for_openai_strict(schema: dict) -> dict:
+    """
+    Recursively sanitize a JSON schema to comply with OpenAI's strict mode requirements.
+
+    OpenAI strict mode requires:
+    1. additionalProperties: false on ALL object types (including nested and $defs)
+    2. All properties must be in the 'required' array
+    3. No unsupported constructs like empty schemas or certain union types
+    4. $ref MUST be standalone - cannot have other keywords like 'description'
+
+    This function modifies the schema in-place and returns it.
+    """
+    if not isinstance(schema, dict):
+        return schema
+
+    # Process $defs first (these are referenced schemas)
+    if "$defs" in schema:
+        for def_name, def_schema in schema["$defs"].items():
+            _sanitize_schema_for_openai_strict(def_schema)
+
+    # CRITICAL: If this has $ref, it MUST be standalone (OpenAI requirement)
+    # Remove any other keywords like 'description', 'title', 'default', etc.
+    if "$ref" in schema:
+        ref_value = schema["$ref"]
+        # Keep only the $ref, remove everything else
+        schema.clear()
+        schema["$ref"] = ref_value
+        return schema
+
+    # Handle object types
+    if schema.get("type") == "object":
+        # Set additionalProperties to false
+        schema["additionalProperties"] = False
+
+        # Ensure all properties are required
+        if "properties" in schema:
+            # Make all properties required
+            schema["required"] = list(schema["properties"].keys())
+
+            # Recursively process nested properties
+            for prop_name, prop_schema in schema["properties"].items():
+                _sanitize_schema_for_openai_strict(prop_schema)
+
+    # Handle array types - process items schema
+    if schema.get("type") == "array" and "items" in schema:
+        _sanitize_schema_for_openai_strict(schema["items"])
+
+    # Handle allOf, anyOf, oneOf
+    for key in ["allOf", "anyOf", "oneOf"]:
+        if key in schema:
+            for sub_schema in schema[key]:
+                _sanitize_schema_for_openai_strict(sub_schema)
+
+    return schema
+
+
+def get_structured_output_format(schema_model: type[BaseModel], name: str, strict: bool = True) -> dict:
+    """
+    Generate OpenAI/OpenRouter compatible response_format for structured outputs
+
+    Args:
+        schema_model: Pydantic model class to use as schema
+        name: Name for the schema (e.g., "evaluation_response")
+        strict: Whether to enforce strict schema adherence
+
+    Returns:
+        Dict ready to use as response_format parameter
+
+    Note:
+        When strict=True, the schema is sanitized to comply with OpenAI's
+        strict mode requirements (additionalProperties: false on all objects,
+        all properties required).
+    """
+    schema = schema_model.model_json_schema()
+
+    # Sanitize schema for OpenAI strict mode compliance
+    if strict:
+        _sanitize_schema_for_openai_strict(schema)
+
+    return {
+        "type": "json_schema",
+        "json_schema": {
+            "name": name,
+            "schema": schema,
+            "strict": strict
+        }
+    }
+
 
 def create_council_metadata() -> CouncilMetadata:
     """Create a new CouncilMetadata instance with defaults"""
